@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, BellRing, Clock, EyeOff, Hash, Inbox, MapPin, Megaphone, MessageSquare, Send, Siren } from "lucide-react";
+import { Bell, BellRing, Clock, EyeOff, Hash, Inbox, MapPin, Megaphone, MessageSquare, PenLine, Send, Siren } from "lucide-react";
 import AppBar from "../components/AppBar.jsx";
 import ProtocolLog from "../components/ProtocolLog.jsx";
 import SignIn from "../components/SignIn.jsx";
@@ -22,6 +22,7 @@ export default function Resident() {
   const [advisories, setAdvisories] = useState([]);
   const [following, setFollowing] = useState(null);         // advisory topic subscribed
   const [sending, setSending] = useState(false);
+  const [tab, setTab] = useState("report");                 // phone-only section tabs
   const pending = useRef([]);     // reports sent, waiting for REPORTED (broker answers in order)
 
   const conn = useConnection({
@@ -33,6 +34,7 @@ export default function Resident() {
         const report = pending.current.shift();
         if (!report) return;
         setReports((prev) => new Map(prev).set(event.reportId, { ...report, status: "RECEIVED", escalated: false }));
+        setTab("reports"); // on phones, show the new report's tracker
         toast("Report sent. Your barangay has been notified.");
       } else if (event.command === "MSG") {
         const body = event.body || {};
@@ -140,6 +142,12 @@ export default function Resident() {
   const reportList = [...reports.entries()].reverse();
   const followTarget = topicLevel(form.barangay);
   const isFollowingTarget = following && following === `brgy.${followTarget}.advisory`;
+  const hideOnPhone = (id) => (tab === id ? "" : " m-hide");
+  const tabs = [
+    { id: "report", label: "New report", icon: PenLine },
+    { id: "reports", label: "My reports", icon: Inbox, count: reportList.length },
+    { id: "advisories", label: "Advisories", icon: Megaphone, count: advisories.length },
+  ];
 
   return (
     <>
@@ -154,8 +162,17 @@ export default function Resident() {
             </div>
           </div>
 
+          <div className="m-tabs" role="tablist" aria-label="Sections">
+            {tabs.map(({ id, label, icon: Icon, count }) => (
+              <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+                <Icon size={16} /> {label}
+                {count > 0 && <span className="count">{count}</span>}
+              </button>
+            ))}
+          </div>
+
           <div className="split">
-            <section className="card card-pad" aria-labelledby="new-report">
+            <section className={`card card-pad${hideOnPhone("report")}`} aria-labelledby="new-report">
               <div className="card-head">
                 <div>
                   <h2 className="card-title" id="new-report">New report</h2>
@@ -235,7 +252,7 @@ export default function Resident() {
             </section>
 
             <div className="stack">
-              <section className="card card-pad" aria-labelledby="your-reports">
+              <section className={`card card-pad${hideOnPhone("reports")}`} aria-labelledby="your-reports">
                 <div className="card-head">
                   <div>
                     <h2 className="card-title" id="your-reports">Your reports</h2>
@@ -282,7 +299,7 @@ export default function Resident() {
                 )}
               </section>
 
-              <section className="card card-pad" aria-labelledby="advisories">
+              <section className={`card card-pad${hideOnPhone("advisories")}`} aria-labelledby="advisories">
                 <div className="card-head">
                   <div>
                     <h2 className="card-title" id="advisories">Barangay advisories</h2>

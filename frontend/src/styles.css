@@ -52,6 +52,7 @@
   --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
 
   --appbar-h: 64px;
+  --tabbar-h: 64px;
   --container: 1180px;
   color-scheme: light;
 }
@@ -568,34 +569,194 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
 .toast.error svg { color: #FFB4B4; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
-/* ---------- Responsive ---------- */
+/* ---------- Mobile-only components (hidden on larger screens) ---------- */
+
+/* Bottom tab bar */
+.tabbar {
+  display: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  grid-template-columns: repeat(3, 1fr);
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -6px 20px rgba(11, 27, 63, 0.06);
+}
+.tabbar a {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  color: var(--ink-3); text-decoration: none;
+  font: 600 0.72rem/1 var(--font-text);
+  -webkit-tap-highlight-color: transparent;
+}
+.tabbar a.active { color: var(--primary); }
+.tabbar a.active::before {
+  content: ""; position: absolute; top: 0;
+  width: 36px; height: 3px; border-radius: 0 0 3px 3px; background: var(--primary);
+}
+
+/* Section tabs (resident page) */
+.m-tabs { display: none; }
+.m-tabs button {
+  flex: 1 0 auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 40px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  font: 600 0.84rem var(--font-text); white-space: nowrap; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-tabs button[aria-selected="true"] { background: var(--midnight); border-color: var(--midnight); color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .m-tabs button[aria-selected="true"] { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+}
+.m-tabs .count {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px;
+  border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 0.72rem;
+}
+.m-tabs button[aria-selected="true"] .count { background: rgba(255, 255, 255, 0.2); color: inherit; }
+
+/* Collapsible card head (responder coverage): a plain heading on desktop */
+.collapse-head {
+  width: 100%; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; text-align: left;
+  pointer-events: none;
+}
+.collapse-chev { display: none; flex: none; color: var(--ink-3); transition: transform .2s; }
+.coverage-help { margin-bottom: 12px; }
+
+/* ---------- Tablet ---------- */
 @media (max-width: 1000px) {
   .hero-grid { grid-template-columns: 1fr; }
   .phone-wrap { display: none; }
-  .desk { grid-template-columns: 1fr; }
-  .desk-aside { position: static; }
-  .split { grid-template-columns: 1fr; }
+  /* minmax(0, 1fr): scrolling rows (stats, tabs) must not widen the column */
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .desk { grid-template-columns: minmax(0, 1fr); }
+  .desk > *, .split > * { min-width: 0; }
+  .desk-aside { position: static; gap: 16px; }
+  .presets { grid-template-columns: 1fr 1fr; }
 }
+
+/* ---------- Phone ---------- */
 @media (max-width: 760px) {
-  .appnav a span { display: none; }
+  :root { --appbar-h: 56px; }
+  body { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
+  .container {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+
+  /* App chrome: top bar keeps brand + status, navigation moves to the bottom */
+  .appnav { display: none; }
   .appbar-inner { gap: 12px; }
   .live { padding: 8px; }
   .live-text { display: none; }
-  .form-foot .btn { width: 100%; }
-  .roles, .steps { grid-template-columns: 1fr; }
-  .stats { grid-template-columns: repeat(2, 1fr); }
-  .cat-grid { grid-template-columns: repeat(2, 1fr); }
-  .hero { padding: 48px 0 88px; }
-  .section { padding: 56px 0; }
+  .tabbar { display: grid; }
+  .toast { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px); }
+
+  /* Touch: 16px inputs stop iOS zooming in; 44px minimum targets */
+  .input, .textarea, .select { font-size: 16px; }
+  .btn { height: 44px; }
+  .btn-sm { height: 40px; }
+  .btn-lg { height: 52px; }
+  .icon-btn { width: 32px; height: 32px; }
+  .card { border-radius: var(--r-lg); }
   .card-pad, .signin { padding: 20px; }
-  .container { padding: 0 16px; }
+  .card-head { margin-bottom: 16px; }
+
+  /* Home */
+  .hero { padding: 36px 0 80px; }
+  .hero h1 { margin: 14px 0; }
+  .hero-lead { font-size: 1.02rem; }
+  .hero-cta { flex-direction: column; margin-top: 24px; }
+  .hero-cta .btn { width: 100%; }
+  .hero-proof { flex-direction: column; gap: 12px; margin-top: 28px; }
+  .roles, .steps { grid-template-columns: 1fr; }
+  .roles { margin-top: -48px; gap: 14px; }
+  .role-card, .step { padding: 22px; }
+  .section { padding: 48px 0; }
+  .section-head { margin-bottom: 24px; }
+  .footer .container { flex-direction: column; }
+
+  /* Sign in: top-aligned so the keyboard doesn't cover the button */
+  .signin-wrap { place-items: start center; min-height: 0; padding: 20px 16px 32px; }
+  .signin h1 { font-size: 1.4rem; }
+  .signin > p { margin-bottom: 20px; }
+
+  /* App pages */
+  .page { padding: 20px 0 32px; }
+  .page-head { margin-bottom: 14px; }
+  .page-head h1 { font-size: 1.5rem; margin-top: 6px; }
+  .page-head p { font-size: 0.92rem; }
+  .split, .stack { gap: 16px; }
+
+  /* Resident: one section at a time */
+  .m-tabs {
+    display: flex; gap: 8px;
+    position: sticky; top: var(--appbar-h); z-index: 10;
+    margin: 0 -16px 16px; padding: 10px 16px;
+    background: var(--bg);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .m-tabs::-webkit-scrollbar { display: none; }
+  .m-hide { display: none !important; }
+
+  .cat-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .cat { flex-direction: row; justify-content: flex-start; gap: 10px; min-height: 56px; padding: 10px 12px; text-align: left; }
+  .cat-flag { top: 50%; right: 10px; transform: translateY(-50%); }
+  .form-foot { flex-direction: column-reverse; align-items: stretch; }
+  .form-foot .btn { width: 100%; }
+  .topic-chip { align-self: center; }
+
+  /* Report cards */
+  .report { padding: 14px; gap: 12px; }
+  .report-head { flex-wrap: wrap; }
+  .report-badges { flex-basis: 100%; justify-content: flex-start; padding-left: 56px; }
+  .report-badges:empty { display: none; }
+  .stepper li { font-size: 0.7rem; }
+  .report-actions { gap: 8px; }
+  .report-actions .input { flex: 1 1 100%; height: 44px; font-size: 16px; }
+  .report-actions .btn { flex: 1 1 0; height: 44px; }
+
+  /* Responder desk */
+  .desk-aside { gap: 12px; }
+  .presets { grid-template-columns: 1fr; }
+  .desk-aside .card-pad { padding: 16px; }
+  .collapse-head { pointer-events: auto; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .collapse-chev { display: block; }
+  .collapse-icon { display: none; }
+  .coverage .card-head { margin-bottom: 0; align-items: center; }
+  .coverage.open .card-head { margin-bottom: 14px; }
+  .coverage.open .collapse-chev { transform: rotate(180deg); }
+  .coverage:not(.open) .collapse-body { display: none; }
+
+  .stats {
+    display: flex; gap: 10px;
+    margin: 0 -16px 14px; padding: 2px 16px;
+    overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+  }
+  .stats::-webkit-scrollbar { display: none; }
+  .stat { flex: 0 0 42%; scroll-snap-align: start; padding: 12px 14px; }
+  .stat-value { font-size: 1.5rem; }
+  .toolbar { margin-bottom: 12px; }
+  .segmented { display: flex; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .segmented button { flex: 1 0 auto; justify-content: center; height: 36px; }
+  .feed-card { padding: 0; background: transparent; border: 0; box-shadow: none; }
+  .feed-card .empty { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); }
+
+  .devlog { margin-top: 20px; }
 }
+
 @media (max-width: 420px) {
   .field-row, .choice-group { grid-template-columns: 1fr; }
   .wordmark { font-size: 1.1rem; }
+  /* Three equal section tabs that always fit */
+  .m-tabs { gap: 6px; }
+  .m-tabs button { flex: 1 1 0; min-width: 0; padding: 0 8px; font-size: 0.8rem; }
+  .m-tabs button svg { display: none; }
 }
 @media (max-width: 340px) {
   .appbar .wordmark { display: none; }
+  .cat-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

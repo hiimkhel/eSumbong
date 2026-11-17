@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import {
-  Building2, CheckCircle2, Clock, Inbox, MapPin, MessageSquare, Plus, Radio, ShieldCheck, Siren, Truck, User, X,
+  Building2, CheckCircle2, ChevronDown, Clock, Inbox, MapPin, MessageSquare, Plus, Radio, ShieldCheck, Siren, Truck, User, X,
 } from "lucide-react";
 import AppBar from "../components/AppBar.jsx";
 import ProtocolLog from "../components/ProtocolLog.jsx";
@@ -39,6 +39,7 @@ export default function Responder() {
   const [subs, setSubs] = useState([]);
   const [reports, setReports] = useState(() => new Map()); // report_id -> latest body + extras
   const [filter, setFilter] = useState("all");
+  const [coverageOpen, setCoverageOpen] = useState(true);  // collapsible on phones only
   const seen = useRef(new Set());     // report ids already announced
   const lastSub = useRef(null);       // so an ERR right after SUB can roll it back
 
@@ -126,6 +127,7 @@ export default function Responder() {
     try {
       await conn.send(`SUB ${p}`);
       setPattern("");
+      setCoverageOpen(false); // on phones, get the coverage panel out of the way of the feed
     } catch (err) {
       setSubs((prev) => prev.filter((x) => x !== p));
       toast(err.message, true);
@@ -183,14 +185,20 @@ export default function Responder() {
                 </div>
               </section>
 
-              <section className="card card-pad" aria-labelledby="subs-title">
-                <div className="card-head">
+              <section className={`card card-pad coverage${coverageOpen ? " open" : ""}`} aria-labelledby="subs-title">
+                <button type="button" className="card-head collapse-head" aria-expanded={coverageOpen}
+                  aria-controls="coverage-body" onClick={() => setCoverageOpen((o) => !o)}>
                   <div>
                     <h2 className="card-title" id="subs-title">Coverage</h2>
-                    <p className="card-sub"><code>*</code> matches one level, <code>#</code> the rest.</p>
+                    <p className="card-sub">
+                      {subs.length ? `Listening to ${subs.length} topic${subs.length > 1 ? "s" : ""}` : "Choose what you receive"}
+                    </p>
                   </div>
-                  <Radio size={18} className="muted" />
-                </div>
+                  <Radio size={18} className="muted collapse-icon" />
+                  <ChevronDown size={20} className="collapse-chev" />
+                </button>
+                <div className="collapse-body" id="coverage-body">
+                <p className="card-sub coverage-help"><code>*</code> matches one level, <code>#</code> the rest.</p>
                 <form className="sub-form" onSubmit={(e) => { e.preventDefault(); subscribe(pattern); }}>
                   <label className="sr-only" htmlFor="pattern">Topic pattern</label>
                   <input id="pattern" className="input" placeholder="brgy.jaro.#" value={pattern} onChange={(e) => setPattern(e.target.value)} />
@@ -208,7 +216,7 @@ export default function Responder() {
                     ))}
                   </ul>
                 ) : (
-                  <p className="card-sub" style={{ marginTop: 12 }}>Not subscribed to anything yet.</p>
+                  <p className="card-sub coverage-help">Not subscribed to anything yet.</p>
                 )}
                 <div className="presets">
                   {PRESETS.map(({ pattern: p, label }) => (
@@ -217,6 +225,7 @@ export default function Responder() {
                       <code>{p}</code>
                     </button>
                   ))}
+                </div>
                 </div>
               </section>
             </aside>
@@ -251,7 +260,7 @@ export default function Responder() {
                 </div>
               </div>
 
-              <div className="card card-pad">
+              <div className="card card-pad feed-card">
                 {feed.length === 0 ? (
                   reports.size === 0 ? (
                     <EmptyState icon={Radio} title={subs.length ? "Listening for reports" : "No coverage yet"}>
