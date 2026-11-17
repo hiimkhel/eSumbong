@@ -15,12 +15,15 @@ Usage:
     store.save_report(...)
 """
 
+import logging
 import sqlite3
 import threading
 import time
 
 import config
 import topic_matcher
+
+log = logging.getLogger("store")
 
 _lock = threading.RLock()
 _conn = None
@@ -353,6 +356,31 @@ def due_for_retry(retry_seconds=None, now=None):
             (cutoff,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def start_retry_thread(resend, stop_event, retry_seconds=None, check_every=1.0):
+    """Start the background retry loop and return its thread.
+
+    Every `check_every` seconds it looks up deliveries sent more than
+    `retry_seconds` ago (default config.RETRY_SECONDS) without an ACK, and
+    calls resend(row) for each. `row` is a dict from due_for_retry(). The
+    broker's resend decides whether the client is online; this module never
+    touches sockets. The loop ends once stop_event is set.
+    """
+    def loop():
+        while not stop_event.wait(check_every):
+            try:
+                for row in due_for_retry(retry_seconds):
+                    if stop_event.is_set():
+                        break
+                    resend(row)
+            except Exception:  # keep retrying even if one pass fails
+                if not stop_event.is_set():
+                    log.exception("retry pass failed")
+
+    thread = threading.Thread(target=loop, name="retry", daemon=True)
+    thread.start()
+    return thread
 
 
 # ---------------------------------------------------------------- status log

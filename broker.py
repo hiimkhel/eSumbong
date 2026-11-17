@@ -8,10 +8,16 @@ Run:
     python broker.py                 # 127.0.0.1:5050, sumbong.db (from config.py)
     python broker.py --port 6000 --db test.db --verbose
 
-Pass 2 scope: sessions, HELLO / SUB / UNSUB / REPORT / ACK / PING / PONG,
-report ids, persistence through store.py, and live fan-out of MSG to
-connected subscribers. Offline subscribers get a PENDING delivery row that
-the Pass 3 retry / catch-up code will send. STATUS arrives in Pass 4.
+Delivery is at-least-once:
+  * every MSG is stored with a PENDING delivery row per subscriber, online or not;
+  * a connected subscriber gets it at once; ACK <msg_id> marks it DELIVERED;
+  * the retry thread resends unACKed messages every config.RETRY_SECONDS,
+    with the same msg_id, so clients can drop duplicates;
+  * a subscriber that was offline gets all its PENDING messages, oldest
+    first, as soon as it sends HELLO (store-and-forward catch-up).
+Because state lives in sumbong.db, all of this survives a broker restart.
+
+STATUS arrives in Pass 4.
 """
 
 import argparse
@@ -81,10 +87,13 @@ class Session:
 
 class Broker:
 
-    def __init__(self, host=config.HOST, port=config.PORT, db_path=None):
+    def __init__(self, host=config.HOST, port=config.PORT, db_path=None,
+                 retry_seconds=config.RETRY_SECONDS, retry_check_seconds=1.0):
         self.host = host
         self.port = port
         self.db_path = db_path
+        self.retry_seconds = retry_seconds
+        self.retry_check_seconds = retry_check_seconds
         self._online = {}               # client_id -> Session
         self._online_lock = threading.Lock()
         self._stop = threading.Event()
@@ -119,8 +128,10 @@ class Broker:
         t = threading.Thread(target=self._accept_loop, name="accept", daemon=True)
         t.start()
         self._threads.append(t)
-        log.info("listening on %s:%d (db: %s)", self.host, self.port,
-                 self.db_path or config.DB_PATH)
+        self._threads.append(store.start_retry_thread(
+            self._resend, self._stop, self.retry_seconds, self.retry_check_seconds))
+        log.info("listening on %s:%d (db: %s, retry every %ss)", self.host, self.port,
+                 self.db_path or config.DB_PATH, self.retry_seconds)
         return self.host, self.port
 
     def stop(self):
@@ -237,7 +248,16 @@ class Broker:
         self.on_hello(session)
 
     def on_hello(self, session):
-        """Hook for Pass 3: send this client's PENDING deliveries (catch-up)."""
+        """Catch-up: send every message this client has not ACKed yet, oldest
+        first. Covers messages published while it was offline, and messages
+        sent to a connection that died before the ACK came back."""
+        pending = store.pending_for(session.client_id)
+        if not pending:
+            return
+        sent = sum(1 for row in pending
+                   if self.send_to(session.client_id, row["msg_id"], self.msg_line(row)))
+        log.info("catch-up: sent %d/%d pending message(s) to %s",
+                 sent, len(pending), session.client_id)
 
     def cmd_sub(self, session, line):
         pattern = self._pattern_arg(line, "SUB")
@@ -345,7 +365,8 @@ class Broker:
         recipients = store.subscribers_for(topic)
         store.save_message(msg_id, report["report_id"], topic, priority, body,
                            recipients=recipients)
-        line = f"MSG {msg_id} {topic} {priority} {body}"
+        line = self.msg_line({"msg_id": msg_id, "topic": topic,
+                              "priority": priority, "body": body})
         sent = 0
         for client_id in recipients:
             if self.send_to(client_id, msg_id, line):
@@ -353,6 +374,18 @@ class Broker:
         log.info("published %s on %s to %d/%d subscribers online",
                  msg_id, topic, sent, len(recipients))
         return msg_id
+
+    @staticmethod
+    def msg_line(row):
+        """MSG <msg_id> <topic> <priority> <body> from a stored message row."""
+        return f"MSG {row['msg_id']} {row['topic']} {row['priority']} {row['body']}"
+
+    def _resend(self, row):
+        """Retry-thread callback: resend one unACKed message if the client is
+        online. Offline clients are skipped; HELLO catch-up handles them."""
+        if self.send_to(row["client_id"], row["msg_id"], self.msg_line(row)):
+            log.info("retry: resent %s to %s (attempt %d)",
+                     row["msg_id"], row["client_id"], row["attempts"] + 1)
 
     def send_to(self, client_id, msg_id, line):
         """Send a MSG line to one client if connected, recording the attempt."""

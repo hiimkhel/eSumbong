@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,9 +66,10 @@ def parse_msg(line):
 
 
 class BrokerTestCase(unittest.TestCase):
+    broker_kwargs = {}
 
     def setUp(self):
-        self.broker = broker.Broker("127.0.0.1", 0, ":memory:")
+        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", **self.broker_kwargs)
         _, self.port = self.broker.start()
         self.clients = []
 
@@ -75,6 +77,16 @@ class BrokerTestCase(unittest.TestCase):
         for c in self.clients:
             c.close()
         self.broker.stop()
+
+    def disconnect(self, c, client_id):
+        """Close a client and wait until the broker has noticed."""
+        c.close()
+        self.clients.remove(c)
+        deadline = time.time() + TIMEOUT
+        while client_id in self.broker.online_clients():
+            if time.time() > deadline:
+                raise AssertionError(f"broker still thinks {client_id} is online")
+            time.sleep(0.02)
 
     def client(self, client_id=None, role=None):
         c = Client(self.port)
@@ -221,8 +233,7 @@ class DeliveryTest(BrokerTestCase):
         tanod = self.client("tanod1", "responder")
         tanod.send("SUB brgy.#")
         tanod.sync()
-        tanod.close()
-        self.clients.remove(tanod)
+        self.disconnect(tanod, "tanod1")
         res = self.client("juan", "resident")
         res.ask("REPORT brgy.jaro.p1.fire N help")
         res.sync()  # REPORTED is sent before fan-out; wait for fan-out to finish
