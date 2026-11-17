@@ -22,8 +22,11 @@ connection to the broker and sends the same one-line commands the CLI clients se
 | `src/pages/Responder.jsx` | Tanod / captain / city desk feed: subscribe, RESPONDING, RESOLVED |
 | `src/hooks/useConnection.js` | One broker session per page, plus its protocol log |
 | `src/lib/sumbong.js` | Gateway client: connect, send commands, parse broker lines, ACK messages |
-| `src/components/` | Header, toast, status pills, protocol log |
-| `src/styles.css` | eSumbong brand styles (light and dark) |
+| `src/components/` | App bar, sign-in, toast, protocol log, and `ui.jsx` (logo, status tracker, badges, empty states) |
+| `src/lib/format.js` | Category labels and icons, place names from topics, times |
+| `src/styles.css` | eSumbong design system: brand tokens, type, components (light and dark) |
+
+Icons come from [Lucide](https://lucide.dev) (`lucide-react`).
 | `public/logo.svg` | Rise logo, also the favicon |
 
 ## Requirements

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
 
 const ToastContext = createContext(() => {});
 
@@ -8,7 +9,7 @@ export function ToastProvider({ children }) {
 
   const show = useCallback((message, isError = false) => {
     clearTimeout(timer.current);
-    setToast({ message, isError });
+    setToast({ message, isError, key: Date.now() });
     timer.current = setTimeout(() => setToast(null), 4000);
   }, []);
 
@@ -18,7 +19,8 @@ export function ToastProvider({ children }) {
     <ToastContext.Provider value={show}>
       {children}
       {toast && (
-        <div className={`toast${toast.isError ? " error" : ""}`} role="status">
+        <div key={toast.key} className={`toast${toast.isError ? " error" : ""}`} role={toast.isError ? "alert" : "status"}>
+          {toast.isError ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
           {toast.message}
         </div>
       )}
