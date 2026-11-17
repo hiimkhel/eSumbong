@@ -1,31 +1,50 @@
 import { useMemo, useRef, useState } from "react";
-import Header from "../components/Header.jsx";
+import {
+  Building2, CheckCircle2, Clock, Inbox, MapPin, MessageSquare, Plus, Radio, ShieldCheck, Siren, Truck, User, X,
+} from "lucide-react";
+import AppBar from "../components/AppBar.jsx";
 import ProtocolLog from "../components/ProtocolLog.jsx";
-import StatusPills from "../components/StatusPills.jsx";
+import SignIn from "../components/SignIn.jsx";
 import { useToast } from "../components/Toast.jsx";
+import { CategoryTile, EmptyState, StatusBadge, StatusStepper } from "../components/ui.jsx";
 import { useConnection } from "../hooks/useConnection.js";
+import { categoryMeta, clockTime, placeFromTopic } from "../lib/format.js";
 import { oneLine } from "../lib/sumbong.js";
 
+const ROLES = [
+  { value: "responder", label: "Responder", hint: "Tanod or captain", icon: ShieldCheck },
+  { value: "desk", label: "City desk", hint: "Handles escalations", icon: Building2 },
+];
+
+const PRESETS = [
+  { pattern: "brgy.#", label: "All barangays" },
+  { pattern: "city.iloilo.escalated.#", label: "Escalated to the city" },
+];
+
+const FILTERS = [
+  { id: "all", label: "All", test: () => true },
+  { id: "urgent", label: "Urgent", test: (r) => r.priority === "URGENT" && r.status !== "RESOLVED" },
+  { id: "open", label: "Open", test: (r) => r.status !== "RESOLVED" },
+  { id: "resolved", label: "Resolved", test: (r) => r.status === "RESOLVED" },
+];
+
 const urgentFirst = (r) => (r.priority === "URGENT" ? 0 : 1);
+const openFirst = (r) => (r.status === "RESOLVED" ? 1 : 0);
 
 // Responder / desk: subscribe to topics, receive reports, publish STATUS updates.
 export default function Responder() {
   const toast = useToast();
-  const [clientId, setClientId] = useState("");
-  const [role, setRole] = useState("responder");
+  const [identity, setIdentity] = useState({ id: "", role: "responder" });
   const [pattern, setPattern] = useState("");
   const [subs, setSubs] = useState([]);
   const [reports, setReports] = useState(() => new Map()); // report_id -> latest body + extras
-  const [urgentOnly, setUrgentOnly] = useState(false);
-  const [hideResolved, setHideResolved] = useState(false);
+  const [filter, setFilter] = useState("all");
   const seen = useRef(new Set());     // report ids already announced
   const lastSub = useRef(null);       // so an ERR right after SUB can roll it back
 
   const conn = useConnection({
-    onState: (status, reason) => {
-      if (status === "online") return;
-      setSubs([]);
-      if (reason) toast(reason, true);
+    onState: (status) => {
+      if (status !== "online") setSubs([]);
     },
     onEvent: (event) => {
       if (event.command === "MSG") {
@@ -45,7 +64,7 @@ export default function Responder() {
         });
         if (!seen.current.has(body.report_id)) {
           seen.current.add(body.report_id);
-          if (priority === "URGENT") toast(`URGENT: ${body.category} at ${body.topic}`, true);
+          if (priority === "URGENT") toast(`Urgent: ${categoryMeta(body.category).label} at ${placeFromTopic(body.topic)}`, true);
         }
       } else if (event.command === "ERR") {
         toast(`Broker error: ${event.reason}`, true);
@@ -58,19 +77,48 @@ export default function Responder() {
     },
   });
 
-  async function onConnect(e) {
-    e.preventDefault();
+  const counts = useMemo(() => {
+    const all = [...reports.values()];
+    return Object.fromEntries(FILTERS.map((f) => [f.id, all.filter(f.test).length]));
+  }, [reports]);
+
+  const feed = useMemo(() => {
+    const { test } = FILTERS.find((f) => f.id === filter);
+    return [...reports.entries()]
+      .filter(([, r]) => test(r))
+      .sort(([, a], [, b]) => openFirst(a) - openFirst(b) || urgentFirst(a) - urgentFirst(b) || b.receivedAt - a.receivedAt);
+  }, [reports, filter]);
+
+  async function connect(id, role) {
     try {
-      await conn.connect(clientId.trim(), role);
+      await conn.connect(id, role);
+      setIdentity({ id, role });
     } catch (err) {
       toast(err.message, true);
     }
   }
 
-  async function onSubscribe(e) {
-    e.preventDefault();
-    const p = pattern.trim().toLowerCase();
-    if (!p || /\s/.test(p)) return toast("Pattern must be one word, e.g. brgy.jaro.#", true);
+  if (!conn.online) {
+    return (
+      <>
+        <AppBar active="responder" conn={conn} />
+        <SignIn
+          title="Responder desk"
+          lead="Sign in to receive reports from the barangays you cover and update their status."
+          foot="Residents see each status update you send."
+          placeholder="e.g. tanod-jaro-1"
+          roles={ROLES}
+          defaultRole={identity.role}
+          reason={conn.reason}
+          onConnect={connect}
+        />
+      </>
+    );
+  }
+
+  async function subscribe(raw) {
+    const p = raw.trim().toLowerCase();
+    if (!p || /\s/.test(p)) return toast("A topic pattern is one word, e.g. brgy.jaro.#", true);
     if (subs.includes(p)) return toast(`Already subscribed to ${p}`);
     // Add first: the broker's ERR can arrive before the send request returns.
     lastSub.current = p;
@@ -84,7 +132,7 @@ export default function Responder() {
     }
   }
 
-  async function onUnsubscribe(p) {
+  async function unsubscribe(p) {
     try {
       await conn.send(`UNSUB ${p}`);
       setSubs((prev) => prev.filter((x) => x !== p));
@@ -101,93 +149,130 @@ export default function Responder() {
         const r = prev.get(reportId);
         return r ? new Map(prev).set(reportId, { ...r, status, note }) : prev;
       });
+      toast(status === "RESPONDING" ? "Marked as responding. The resident has been notified." : "Report resolved.");
     } catch (err) {
       toast(err.message, true);
     }
   }
 
-  const feed = useMemo(() => [...reports.entries()]
-    .filter(([, r]) => !urgentOnly || r.priority === "URGENT")
-    .filter(([, r]) => !hideResolved || r.status !== "RESOLVED")
-    .sort(([, a], [, b]) => urgentFirst(a) - urgentFirst(b) || b.receivedAt - a.receivedAt),
-  [reports, urgentOnly, hideResolved]);
+  const role = ROLES.find((r) => r.value === identity.role) || ROLES[0];
+  const responding = [...reports.values()].filter((r) => r.status === "RESPONDING").length;
 
   return (
     <>
-      <Header section="Responder / Desk" conn={conn} />
-      <main>
-        <div className="grid">
-          <section className="card">
-            <h2>Connect</h2>
-            <form onSubmit={onConnect}>
-              <div className="row">
-                <div>
-                  <label htmlFor="client-id">Your ID (no spaces)</label>
-                  <input id="client-id" required maxLength={64} pattern="\S+" placeholder="e.g. tanod-jaro-1"
-                    value={clientId} onChange={(e) => setClientId(e.target.value)} disabled={conn.online} />
-                </div>
-                <div>
-                  <label htmlFor="role">Role</label>
-                  <select id="role" value={role} onChange={(e) => setRole(e.target.value)} disabled={conn.online}>
-                    <option value="responder">Responder (tanod / captain)</option>
-                    <option value="desk">City desk</option>
-                  </select>
-                </div>
-              </div>
-              <div className="row actions">
-                <button type="submit" disabled={conn.online}>Connect</button>
-                <button type="button" className="secondary" disabled={!conn.online} onClick={conn.disconnect}>Disconnect</button>
-              </div>
-            </form>
-          </section>
-
-          <section className="card">
-            <h2>Subscriptions</h2>
-            <form className="row" onSubmit={onSubscribe}>
-              <div>
-                <label htmlFor="pattern">Topic pattern</label>
-                <input id="pattern" required placeholder="brgy.jaro.#" value={pattern} onChange={(e) => setPattern(e.target.value)} />
-              </div>
-              <div className="fit">
-                <button type="submit" disabled={!conn.online}>Subscribe</button>
-              </div>
-            </form>
-            <p className="meta">* matches one level, # matches the rest. Desk example: city.iloilo.escalated.#</p>
-            <ul className="list">
-              {subs.map((p) => (
-                <li key={p} className="item-head spread">
-                  <code>{p}</code>
-                  <button type="button" className="small secondary" onClick={() => onUnsubscribe(p)}>Unsubscribe</button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-
-        <section className="card stack">
-          <div className="item-head spread">
-            <h2 className="flush">Incoming reports</h2>
-            <div className="item-head">
-              <label className="check">
-                <input type="checkbox" checked={urgentOnly} onChange={(e) => setUrgentOnly(e.target.checked)} /> Urgent only
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={hideResolved} onChange={(e) => setHideResolved(e.target.checked)} /> Hide resolved
-              </label>
+      <AppBar active="responder" conn={conn} identity={identity.id} />
+      <main className="page">
+        <div className="container">
+          <div className="page-head">
+            <div>
+              <span className="eyebrow">{role.value === "desk" ? "City desk" : "Responder desk"}</span>
+              <h1>Incoming reports</h1>
+              <p>Urgent and open reports stay at the top until they're resolved.</p>
             </div>
           </div>
-          {feed.length === 0
-            ? <p className="empty">No reports yet. Subscribe to a topic to start receiving them.</p>
-            : (
-              <ul className="list stack-sm">
-                {feed.map(([id, r]) => (
-                  <ReportCard key={id} id={id} report={r} online={conn.online} onStatus={updateStatus} />
-                ))}
-              </ul>
-            )}
-        </section>
 
-        <div className="stack">
+          <div className="desk">
+            <aside className="desk-aside">
+              <section className="card card-pad">
+                <div className="identity">
+                  <span className="avatar">{identity.id.slice(0, 2)}</span>
+                  <div>
+                    <strong>{identity.id}</strong>
+                    <span>{role.label} · {role.hint}</span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="card card-pad" aria-labelledby="subs-title">
+                <div className="card-head">
+                  <div>
+                    <h2 className="card-title" id="subs-title">Coverage</h2>
+                    <p className="card-sub"><code>*</code> matches one level, <code>#</code> the rest.</p>
+                  </div>
+                  <Radio size={18} className="muted" />
+                </div>
+                <form className="sub-form" onSubmit={(e) => { e.preventDefault(); subscribe(pattern); }}>
+                  <label className="sr-only" htmlFor="pattern">Topic pattern</label>
+                  <input id="pattern" className="input" placeholder="brgy.jaro.#" value={pattern} onChange={(e) => setPattern(e.target.value)} />
+                  <button type="submit" className="btn btn-primary" aria-label="Subscribe"><Plus size={18} /></button>
+                </form>
+                {subs.length > 0 ? (
+                  <ul className="subs" aria-label="Subscriptions">
+                    {subs.map((p) => (
+                      <li key={p} className="sub-chip">
+                        {p}
+                        <button type="button" className="icon-btn" aria-label={`Unsubscribe from ${p}`} onClick={() => unsubscribe(p)}>
+                          <X size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="card-sub" style={{ marginTop: 12 }}>Not subscribed to anything yet.</p>
+                )}
+                <div className="presets">
+                  {PRESETS.map(({ pattern: p, label }) => (
+                    <button key={p} type="button" className="preset" disabled={subs.includes(p)} onClick={() => subscribe(p)}>
+                      <span>{label}</span>
+                      <code>{p}</code>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </aside>
+
+            <section aria-label="Report feed">
+              <div className="stats">
+                <div className="stat urgent">
+                  <span className="stat-label"><Siren size={15} /> Urgent</span>
+                  <div className="stat-value">{counts.urgent}</div>
+                </div>
+                <div className="stat">
+                  <span className="stat-label"><Inbox size={15} /> Open</span>
+                  <div className="stat-value">{counts.open}</div>
+                </div>
+                <div className="stat">
+                  <span className="stat-label"><Truck size={15} /> Responding</span>
+                  <div className="stat-value">{responding}</div>
+                </div>
+                <div className="stat">
+                  <span className="stat-label"><CheckCircle2 size={15} /> Resolved</span>
+                  <div className="stat-value">{counts.resolved}</div>
+                </div>
+              </div>
+
+              <div className="toolbar">
+                <div className="segmented" role="group" aria-label="Filter reports">
+                  {FILTERS.map((f) => (
+                    <button key={f.id} type="button" aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
+                      {f.label} <span className="count">{counts[f.id]}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="card card-pad">
+                {feed.length === 0 ? (
+                  reports.size === 0 ? (
+                    <EmptyState icon={Radio} title={subs.length ? "Listening for reports" : "No coverage yet"}>
+                      {subs.length
+                        ? "New reports for your topics will appear here as soon as residents send them."
+                        : "Subscribe to a barangay on the left, e.g. brgy.jaro.#, to start receiving reports."}
+                    </EmptyState>
+                  ) : (
+                    <EmptyState icon={Inbox} title="Nothing here">No reports match this filter.</EmptyState>
+                  )
+                ) : (
+                  <ul className="reports">
+                    {feed.map(([id, r]) => (
+                      <IncidentCard key={id} id={id} report={r} onStatus={updateStatus} />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          </div>
+
           <ProtocolLog entries={conn.log} />
         </div>
       </main>
@@ -195,34 +280,54 @@ export default function Responder() {
   );
 }
 
-function ReportCard({ id, report: r, online, onStatus }) {
+function IncidentCard({ id, report: r, onStatus }) {
   const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
   const status = r.status || "RECEIVED";
   const urgent = r.priority === "URGENT";
+  const resolved = status === "RESOLVED";
+
+  async function act(next) {
+    setBusy(true);
+    await onStatus(id, next, note);
+    setBusy(false);
+    setNote("");
+  }
 
   return (
-    <li className={urgent ? "urgent" : ""}>
-      <div className="item-head">
-        <strong>{r.category || "report"}</strong>
-        <StatusPills status={status} urgent={urgent} escalated={r.escalated} />
+    <li className={`report${urgent && !resolved ? " is-urgent" : ""}${resolved ? " is-resolved" : ""}`}>
+      <div className="report-head">
+        <CategoryTile category={r.category} urgent={urgent} />
+        <div className="report-title">
+          <strong>{categoryMeta(r.category).label}</strong>
+          <span><MapPin size={13} /> {placeFromTopic(r.topic || r.lastTopic)}</span>
+        </div>
+        <div className="report-badges">
+          {urgent && <span className="badge badge-urgent">Urgent</span>}
+          {r.escalated && <span className="badge badge-escalated">Escalated to city</span>}
+          <StatusBadge status={status} />
+        </div>
       </div>
-      <p className="item-body">{r.description}</p>
-      <p className="meta">
-        #{id} · {r.topic || r.lastTopic} · {r.reporter ? `reported by ${r.reporter}` : "anonymous"} ·{" "}
-        {new Date(r.receivedAt).toLocaleTimeString()}
-      </p>
-      {r.note && <p className="meta">Last note: {r.note}</p>}
-      {status !== "RESOLVED" && (
-        <div className="row actions">
-          <input placeholder="Note (optional)" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} />
-          <div className="fit">
-            <button type="button" className="small" disabled={!online || status !== "RECEIVED"}
-              onClick={() => onStatus(id, "RESPONDING", note)}>Responding</button>
-          </div>
-          <div className="fit">
-            <button type="button" className="small secondary" disabled={!online}
-              onClick={() => onStatus(id, "RESOLVED", note)}>Resolved</button>
-          </div>
+      {r.description && <p className="report-desc">{r.description}</p>}
+      <StatusStepper status={status} />
+      {r.note && <p className="report-note"><MessageSquare size={15} /> <span><strong>Last note:</strong> {r.note}</span></p>}
+      <div className="report-meta">
+        <span>#{id}</span>
+        <span><User size={12} /> {r.reporter ? r.reporter : "Anonymous"}</span>
+        <span><Clock size={12} /> {clockTime(r.receivedAt)}</span>
+      </div>
+      {!resolved && (
+        <div className="report-actions">
+          <input className="input" placeholder="Add a note for the resident (optional)" maxLength={200}
+            value={note} onChange={(e) => setNote(e.target.value)} aria-label={`Note for report ${id}`} />
+          {status === "RECEIVED" && (
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => act("RESPONDING")}>
+              <Truck size={15} /> Respond
+            </button>
+          )}
+          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => act("RESOLVED")}>
+            <CheckCircle2 size={15} /> Resolve
+          </button>
         </div>
       )}
     </li>
