@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 sumbong.db
+sumbong.db-*
 .vscode/
 .venv/
 frontend/node_modules/
