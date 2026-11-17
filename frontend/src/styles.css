@@ -164,6 +164,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .conn.online::before { background: var(--online); }
 .conn.offline::before { background: var(--alert-amber); }
 
+.row > .fit { flex: 0 0 auto; }
+.actions { margin-top: 0.75rem; }
+.stack { margin-top: 1rem; }
+.stack-sm { margin-top: 0.75rem; }
+.flush { margin: 0 !important; }
+
+/* Report heading line: title + pills, kept to their natural width */
+.item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.item-head.spread { justify-content: space-between; }
+.item-body { margin: 0.4rem 0; }
+
 .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
 .list li { border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.8rem; background: var(--bg); }
 .list li.urgent { border-left: 4px solid var(--urgent); }

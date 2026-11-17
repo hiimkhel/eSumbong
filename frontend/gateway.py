@@ -1,5 +1,6 @@
 """frontend/gateway.py
-Purpose: Serve the web frontend and bridge browser sessions to the Sumbong broker.
+Purpose: Serve the web frontend (the React build in frontend/dist) and bridge
+browser sessions to the Sumbong broker.
 
 Browsers cannot open raw TCP sockets, so each browser session gets its own TCP
 connection to the broker through this gateway. The gateway forwards the exact
@@ -34,14 +35,18 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import config  # noqa: E402  (shared team settings live in the repo root)
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+# The React app's production build (`npm run build` in frontend/).
+STATIC_DIR = Path(__file__).resolve().parent / "dist"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json",
+    ".map": "application/json",
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
 }
 # Commands a browser may send after the gateway has sent HELLO for it.
 ALLOWED_COMMANDS = {"SUB", "UNSUB", "REPORT", "ACK", "STATUS", "PING", "PONG"}
@@ -290,6 +295,9 @@ def main():
     server.broker_addr = (args.broker_host, args.broker_port)
     server.sessions = SessionRegistry()
     log.info("serving http://%s:%d -> broker %s:%d", args.host, args.port, args.broker_host, args.broker_port)
+    if not (STATIC_DIR / "index.html").is_file():
+        log.warning("no web build in %s; run `npm install` and `npm run build` in frontend/ "
+                    "(the API still works, e.g. for `npm run dev`)", STATIC_DIR)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
