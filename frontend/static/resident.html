@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sumbong · Resident</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1><a href="index.html">Sumbong</a> · Resident</h1>
+    <span id="conn" class="conn offline">Not connected</span>
+  </header>
+  <main class="grid">
+    <section class="card">
+      <h2>1. Connect</h2>
+      <form id="connect-form">
+        <label for="client-id">Your ID (no spaces)</label>
+        <input id="client-id" required maxlength="64" pattern="\S+" placeholder="e.g. juan-dc">
+        <div class="row" style="margin-top:.75rem">
+          <button type="submit" id="connect-btn">Connect</button>
+          <button type="button" id="disconnect-btn" class="secondary" disabled>Disconnect</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>2. Report an incident</h2>
+      <form id="report-form">
+        <div class="row">
+          <div>
+            <label for="barangay">Barangay</label>
+            <input id="barangay" required placeholder="e.g. jaro">
+          </div>
+          <div>
+            <label for="purok">Purok</label>
+            <input id="purok" required placeholder="e.g. purok-3">
+          </div>
+        </div>
+        <label for="category">Category</label>
+        <select id="category" required></select>
+        <label for="description">What happened?</label>
+        <textarea id="description" required maxlength="500" placeholder="Short description and exact location"></textarea>
+        <label class="check"><input type="checkbox" id="anonymous"> Report anonymously</label>
+        <p class="meta">Topic: <span id="topic-preview">—</span></p>
+        <div class="row">
+          <button type="submit" id="report-btn" disabled>Send report</button>
+          <button type="button" id="advisory-btn" class="secondary" disabled>Follow barangay advisories</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>My reports</h2>
+      <ul id="reports" class="list"></ul>
+      <p id="reports-empty" class="empty">No reports yet.</p>
+    </section>
+
+    <section class="card">
+      <h2>Advisories</h2>
+      <ul id="advisories" class="list"></ul>
+      <p id="advisories-empty" class="empty">Nothing yet.</p>
+    </section>
+
+    <section class="card">
+      <h2>Protocol log</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+  <script src="js/sumbong.js"></script>
+  <script src="js/resident.js"></script>
+</body>
+</html>
