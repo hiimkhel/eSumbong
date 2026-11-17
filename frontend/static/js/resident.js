@@ -90,7 +90,7 @@
           el("strong", {}, r.category || "report"),
           el("span", {}, el("span", { class: `pill ${(r.status || "").toLowerCase()}` }, r.status || "RECEIVED")),
           urgent ? el("span", {}, el("span", { class: "pill urgent" }, "URGENT")) : null,
-          r.escalated ? el("span", {}, el("span", { class: "pill urgent" }, "ESCALATED")) : null,
+          r.escalated ? el("span", {}, el("span", { class: "pill escalated" }, "ESCALATED")) : null,
         ),
         el("p", { style: "margin:.4rem 0" }, r.description || ""),
         r.note ? el("p", { class: "meta" }, `Responder note: ${r.note}`) : null,
