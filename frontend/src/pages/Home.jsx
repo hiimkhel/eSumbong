@@ -1,6 +1,6 @@
 import { ArrowRight, BellRing, CheckCircle2, ChevronsUp, Clock, EyeOff, Megaphone, ShieldCheck, Zap } from "lucide-react";
 import AppBar from "../components/AppBar.jsx";
-import { LogoMark, Wordmark } from "../components/ui.jsx";
+import PhoneMockup from "../components/PhoneMockup.jsx";
 
 export default function Home() {
   return (
@@ -31,26 +31,16 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="phone-wrap" aria-hidden="true">
-            <div className="phone">
-              <div className="phone-screen">
-                <div className="phone-top"><LogoMark size={22} variant="light" /><Wordmark /></div>
-                <div className="phone-body">
-                  <small>Brgy. San Roque · Purok 3</small>
-                  <h4>May sumbong ka?</h4>
-                  <div className="phone-cta">Report an incident</div>
-                  <small>Your reports</small>
-                  <div className="phone-item">Noise · Purok 3 <span className="badge b-resp">Responding</span></div>
-                  <div className="phone-item">Drinking · Purok 3 <span className="badge b-esc">Escalated to city</span></div>
-                  <div className="phone-item">Road · Purok 3 <span className="badge b-res">Resolved</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <PhoneMockup />
         </div>
       </section>
 
-      <div className="container">
+      <section className="roles-section" aria-labelledby="roles-title">
+        <div className="container">
+        <div className="section-head">
+          <span className="eyebrow">Get started</span>
+          <h2 id="roles-title">How will you use eSumbong?</h2>
+        </div>
         <div className="roles">
           <a href="#/resident" className="card role-card">
             <span className="role-icon"><Megaphone size={24} /></span>
@@ -75,7 +65,8 @@ export default function Home() {
             <span className="role-go">Open the desk <ArrowRight size={16} /></span>
           </a>
         </div>
-      </div>
+        </div>
+      </section>
 
       <section className="section">
         <div className="container">
