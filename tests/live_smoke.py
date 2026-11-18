@@ -5,7 +5,7 @@ writes real reports into that server's database.
 
 It signs in as a real responder account, so make a dedicated one first, on the
 server, tied to the test barangay (once):
-    python users.py add smoke-tanod --barangay san-roque
+    python users.py add --id smoke-tanod --barangay san-roque
 
 Then, from any machine that can reach the server:
     python tests/live_smoke.py --url <URL>                 # asks for the PIN
@@ -227,7 +227,7 @@ def main():
         try:
             ctx["tanod"] = Session(base, args.tanod, "responder", pin)
         except Failure as exc:
-            raise Failure(f"{exc} (does the account exist? python users.py add {args.tanod} --barangay {brgy})") from None
+            raise Failure(f"{exc} (does the account exist? python users.py add --id {args.tanod} --barangay {brgy})") from None
         sessions.append(ctx["tanod"])
         subscribe(ctx["tanod"], f"brgy.{brgy}.{purok}.#")
         if args.full:

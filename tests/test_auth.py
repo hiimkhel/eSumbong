@@ -137,9 +137,30 @@ class UserStoreTest(unittest.TestCase):
         listed = store.list_users()
         self.assertEqual([u["client_id"] for u in listed], [config.DESK_ID, "tanod-a"])
         self.assertNotIn("secret_hash", listed[0])
-        self.assertTrue(store.delete_user("tanod-a"))
-        self.assertFalse(store.delete_user("tanod-a"))
+        self.assertEqual(store.delete_user("tanod-a"), "tanod-a")
+        self.assertIsNone(store.delete_user("tanod-a"))
         self.assertIsNone(store.get_user("tanod-a"))
+
+    def test_ids_match_without_regard_to_case(self):
+        store.save_user("SR-T01", "responder", "h1", "san-roque")
+        self.assertEqual(store.get_user("sr-t01")["client_id"], "SR-T01")  # keeps its spelling
+        store.save_user("sr-t01", "responder", "h2", "san-roque")  # updates, no second account
+        self.assertEqual([u["client_id"] for u in store.list_users()], ["SR-T01"])
+        self.assertEqual(store.get_user("SR-T01")["secret_hash"], "h2")
+
+    def test_delete_drops_subscriptions_and_backlog(self):
+        store.save_user("SR-T02", "responder", "h", "san-roque")
+        store.add_subscription("SR-T02", "brgy.san-roque.#")
+        store.save_message("m1", None, "brgy.san-roque.advisory", "NORMAL", "{}", recipients=["SR-T02"])
+        self.assertEqual(store.delete_user("sr-t02"), "SR-T02")
+        self.assertEqual(store.subscriptions_for("SR-T02"), [])
+        self.assertEqual(store.pending_for("SR-T02"), [])
+
+    def test_list_by_barangay(self):
+        store.save_user("SR-T01", "responder", "h", "san-roque")
+        store.save_user("TAC-T01", "responder", "h", "tacas")
+        store.save_user(config.DESK_ID, "desk", "h")
+        self.assertEqual([u["client_id"] for u in store.list_users("tacas")], ["TAC-T01"])
 
     def test_role_is_responder_or_desk_only(self):
         import sqlite3
@@ -207,6 +228,12 @@ class AuthBrokerTest(unittest.TestCase):
         self.assertEqual(self.login(config.DESK_ID, "desk", "city-pass-1").ask("WHOAMI"), f"ME {config.DESK_ID} desk -")
         self.assertEqual(self.login("juan", "resident").ask("WHOAMI"), "ME juan resident -")
         self.assertTrue(self.login("juan2", "resident").ask("WHOAMI extra").startswith("ERR usage"))
+
+    def test_account_ids_ignore_case_and_keep_their_spelling(self):
+        store.save_user("SR-T01", "responder", auth.hash_secret("2468", FAST), "san-roque")
+        c = self.login("sr-t01", "responder", "2468")
+        self.assertEqual(c.ask("WHOAMI"), "ME SR-T01 responder san-roque")
+        self.assertIn("SR-T01", self.broker.online_clients())
 
     def test_resident_secret_is_ignored(self):
         self.login("juan", "resident", "whatever")
@@ -283,35 +310,84 @@ class UsersCliTest(unittest.TestCase):
         finally:
             store.close_db()
 
-    def test_add_list_reset_remove(self):
-        code, out = self.run_cli("add", "tanod-a", "--barangay", "san-roque", ask=answers("1234", "1234"))
-        self.assertEqual(code, 0, out)
-        self.assertIn("Added responder tanod-a (San Roque)", out)
-        user = self.stored("tanod-a")
+    def test_tanods_are_numbered_per_barangay(self):
+        pins = answers(*["1234"] * 10)
+        for expected in ["SR-T01", "SR-T02"]:
+            code, out = self.run_cli("add", "--barangay", "san-roque", "--position", "tanod", ask=pins)
+            self.assertEqual(code, 0, out)
+            self.assertIn(f"Added {expected} (tanod, San Roque)", out)
+        code, out = self.run_cli("add", "--barangay", "tacas", "--position", "tanod", ask=pins)
+        self.assertIn("Added TAC-T01 (tanod, Tacas)", out)  # each barangay counts on its own
+        user = self.stored("SR-T01")
+        self.assertEqual(user["barangay"], "san-roque")
         self.assertTrue(auth.verify_secret("1234", user["secret_hash"]))
         self.assertNotIn("1234", user["secret_hash"])
 
-        code, out = self.run_cli("add", "tanod-a", "--barangay", "san-roque", ask=answers("4321", "4321"))
-        self.assertIn("Updated", out)
-        self.assertTrue(auth.verify_secret("4321", self.stored("tanod-a")["secret_hash"]))
+    def test_numbers_continue_after_the_highest(self):
+        pins = answers(*["1234"] * 10)
+        for _ in range(3):
+            self.run_cli("add", "--barangay", "san-roque", "--position", "tanod", ask=pins)
+        self.run_cli("remove", "SR-T02")
+        _, out = self.run_cli("add", "--barangay", "san-roque", "--position", "tanod", ask=pins)
+        self.assertIn("Added SR-T04", out)
 
-        code, out = self.run_cli("desk-password", ask=answers("city-pass-1", "city-pass-1"))
-        self.assertEqual(code, 0, out)
+    def test_one_captain_per_barangay(self):
+        code, out = self.run_cli("add", "--barangay", "mh-del-pilar", "--position", "captain", ask=answers("1234", "1234"))
+        self.assertIn("Added MHP-CAPT (captain, M.H. del Pilar)", out)
+        code, out = self.run_cli("add", "--barangay", "mh-del-pilar", "--position", "captain", ask=answers())
+        self.assertEqual(code, 1)
+        self.assertIn("MHP-CAPT already exists", out)
+        self.assertIn("reset-pin MHP-CAPT", out)
+
+    def test_custom_ids(self):
+        code, out = self.run_cli("add", "--id", "smoke-tanod", "--barangay", "san-roque", ask=answers("1234", "1234"))
+        self.assertIn("Added smoke-tanod (responder, San Roque)", out)
+        code, out = self.run_cli("add", "--id", "roving-1", ask=answers("1234", "1234"))
+        self.assertIn("Added roving-1 (responder, all of Jaro)", out)
+        self.assertIsNone(self.stored("roving-1")["barangay"])
+
+    def test_reset_pin_list_and_remove(self):
+        self.run_cli("add", "--barangay", "san-roque", "--position", "tanod", ask=answers("1234", "1234"))
+        code, out = self.run_cli("reset-pin", "sr-t01", ask=answers("4321", "4321"))  # any case
+        self.assertIn("Changed the PIN for SR-T01", out)
+        self.assertTrue(auth.verify_secret("4321", self.stored("SR-T01")["secret_hash"]))
+
+        self.run_cli("desk-password", ask=answers("city-pass-1", "city-pass-1"))
+        self.run_cli("add", "--barangay", "tacas", "--position", "captain", ask=answers("1234", "1234"))
         code, out = self.run_cli("list")
-        self.assertIn("city", out)
-        self.assertIn("San Roque", out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0].split(), ["ID", "POSITION", "BARANGAY", "ADDED"])
+        self.assertTrue(lines[1].startswith("city ") and "City desk" in lines[1])
+        self.assertIn("Tanod", out)
+        self.assertIn("Captain", out)
+        self.assertEqual(lines[-1], "3 accounts")
+        code, out = self.run_cli("list", "--barangay", "tacas")
+        self.assertIn("TAC-CAPT", out)
+        self.assertNotIn("SR-T01", out)
 
-        self.assertEqual(self.run_cli("remove", "tanod-a")[0], 0)
-        self.assertIsNone(self.stored("tanod-a"))
-        self.assertEqual(self.run_cli("remove", "tanod-a")[0], 1)
+        self.assertIn("Removed SR-T01", self.run_cli("remove", "sr-t01")[1])
+        self.assertIsNone(self.stored("SR-T01"))
+        self.assertEqual(self.run_cli("remove", "SR-T01")[0], 1)
+
+    def test_codes_command(self):
+        code, out = self.run_cli("codes")
+        self.assertEqual(code, 0)
+        self.assertIn("SR   San Roque", out)
+        self.assertEqual(len(out.splitlines()), len(config.BARANGAYS))
 
     def test_refuses_bad_input(self):
+        tanod = ("add", "--barangay", "san-roque", "--position", "tanod")
         cases = [
-            (("add", "tanod-a"), answers("12", "12"), "at least"),
-            (("add", "tanod-a"), answers("1234", "9999"), "do not match"),
-            (("add", "tanod-a", "--barangay", "molo"), answers(), "not a barangay"),
-            (("add", config.DESK_ID), answers(), "desk-password"),
-            (("add", "two words"), answers(), "one word"),
+            (tanod, answers("12", "12"), "at least"),
+            (tanod, answers("1234", "9999"), "do not match"),
+            (("add", "--barangay", "molo", "--position", "tanod"), answers(), "not a barangay"),
+            (("add", "--position", "tanod"), answers(), "needs --barangay"),
+            (("add", "--barangay", "san-roque"), answers(), "--position"),
+            (("add", "--id", "x1", "--position", "tanod", "--barangay", "san-roque"), answers(), "not both"),
+            (("add", "--id", config.DESK_ID), answers(), "desk-password"),
+            (("add", "--id", "SR-T07"), answers(), "made by --position"),
+            (("add", "--id", "two words"), answers(), "one word"),
+            (("reset-pin", "nobody"), answers(), "no account"),
             (("desk-password",), answers("short", "short"), "at least"),
         ]
         for argv, ask, message in cases:
@@ -319,6 +395,17 @@ class UsersCliTest(unittest.TestCase):
             self.assertEqual(code, 1, argv)
             self.assertIn(message, out, argv)
         self.assertIn("No accounts yet", self.run_cli("list")[1])
+
+
+class BarangayCodesTest(unittest.TestCase):
+
+    def test_every_barangay_has_a_unique_code(self):
+        self.assertEqual(set(config.BARANGAY_CODES), set(config.BARANGAYS))
+        codes = list(config.BARANGAY_CODES.values())
+        self.assertEqual(len(codes), len(set(codes)), "duplicate barangay code")
+        for code in codes:
+            self.assertRegex(code, r"^[A-Z0-9]{2,4}$")
+            self.assertNotEqual(code, "CAPT")
 
 
 if __name__ == "__main__":

@@ -32,12 +32,12 @@ Create the accounts before the first responder signs in (each command asks for t
 
 ```
 python users.py desk-password
-python users.py add tanod-a --barangay san-roque
-python users.py add tanod-b --barangay san-roque
-python users.py add captain --barangay san-roque
+python users.py add --barangay san-roque --position tanod     # makes SR-T01
+python users.py add --barangay san-roque --position tanod     # makes SR-T02
+python users.py add --barangay san-roque --position captain   # makes SR-CAPT
 ```
 
-Run the backend tests (170 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
+Run the backend tests (180 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
 
 ```
 python -m unittest discover -s tests
@@ -59,7 +59,7 @@ Start the broker first, then any number of clients, each in its own terminal, fr
 | --- | --- | --- |
 | 1 | `python broker.py` | the broker on 127.0.0.1:5050 (`--verbose` logs every line) |
 | 2 | `python status.py --watch` | read-only status screen, refreshes every 2 s |
-| 3 | `python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#` | a tanod (asks for the PIN) |
+| 3 | `python responder.py --id SR-T01 --sub brgy.san-roque.purok-3.#` | a tanod (asks for the PIN) |
 | 4 | `python responder.py --role desk --sub city.iloilo.escalated.#` | the city desk (asks for the desk password) |
 | 5 | `python resident.py --id resident1` | a resident |
 
@@ -76,11 +76,16 @@ Residents need no account. Responders (tanods, captains) and the city desk sign 
 
 | Command | What it does |
 | --- | --- |
-| `python users.py add <id> --barangay <barangay>` | add a tanod or captain for one barangay (recommended), or reset their PIN if the ID exists |
-| `python users.py add <id>` | a responder for all of Jaro (no barangay limit) |
+| `python users.py add --barangay <barangay> --position tanod` | add a tanod; the ID is made for you: the barangay's code, `T` and the next number (`SR-T01`, `SR-T02`, ...) |
+| `python users.py add --barangay <barangay> --position captain` | add the barangay's captain (`SR-CAPT`; one per barangay) |
+| `python users.py add --id <id> [--barangay <barangay>]` | an account with your own ID, e.g. a test account; without `--barangay` it covers all of Jaro |
+| `python users.py reset-pin <id>` | give an account a new PIN (e.g. a forgotten one) |
+| `python users.py remove <id>` | delete an account and its subscriptions; an open session lasts until it disconnects |
+| `python users.py list [--barangay <barangay>]` | accounts with their position, barangay and date added (never PINs) |
+| `python users.py codes` | every barangay's code (`SR` San Roque, `MHP` M.H. del Pilar, ...) |
 | `python users.py desk-password` | set or change the city desk password (the desk always signs in as `city`) |
-| `python users.py list` | list accounts (never shows PINs) |
-| `python users.py remove <id>` | delete an account; an open session lasts until it disconnects |
+
+IDs ignore case at sign-in, so a tanod may type `sr-t01`. Tanod numbers are never reused while a higher one exists: after removing SR-T02, the next tanod is still SR-T04 if SR-T03 exists. The codes are in `config.BARANGAY_CODES`.
 
 PINs need at least 4 characters and the desk password at least 8, with no spaces. They are typed at a hidden prompt, never on the command line, and stored only as salted hashes. After 5 wrong tries an ID is locked for 5 minutes; restarting the broker clears the locks.
 
@@ -138,7 +143,7 @@ python tests/live_smoke.py --url <URL>
 python tests/live_smoke.py --url <URL> --full
 ```
 
-It signs in as a real responder account, so create one once, on the server: `python users.py add smoke-tanod --barangay san-roque`. The script asks for that PIN (and, with `--full`, the desk password) at a hidden prompt, or reads `SMOKE_TANOD_PIN` and `SMOKE_DESK_PASSWORD`. Use `--tanod <id>` for a different account.
+It signs in as a real responder account, so create one once, on the server: `python users.py add --id smoke-tanod --barangay san-roque`. The script asks for that PIN (and, with `--full`, the desk password) at a hidden prompt, or reads `SMOKE_TANOD_PIN` and `SMOKE_DESK_PASSWORD`. Use `--tanod <id>` for a different account.
 
 Every step should print `PASS` and the last line should be `11/11 steps passed` (`13/13` with `--full`); the exit code is 1 on any failure. It checks that the app is served, that a wrong PIN, a missing PIN and a false desk claim are refused, then covers the gateway command filter, role rules, a NORMAL report, anonymity, RESPONDING/RESOLVED, HISTORY, WITHDRAW and topic isolation. `--full` adds an URGENT fire escalation to the city desk and an advisory.
 
@@ -149,7 +154,7 @@ The test writes to the live database. Its resident ID (`smoke-res-<tag>`) and pu
 | # | Window | Action | Expected |
 | --- | --- | --- | --- |
 | 1 | A | Open `<URL>` | Home page loads; the bar shows Report and Responder desk |
-| 2 | A | Responder desk: first try `tanod-a` (Responder) with a wrong PIN, then the right one. Subscribe to `brgy.san-roque.#` | The wrong PIN shows "Couldn't sign in" and clears the field. Once signed in, the preset reads **All of San Roque** (the account's own barangay) and the topic list offers only San Roque. Coverage shows `brgy.san-roque.#` and the feed says "Listening for reports". |
+| 2 | A | Responder desk: first try `SR-T01` (Responder) with a wrong PIN, then the right one. Subscribe to `brgy.san-roque.#` | The wrong PIN shows "Couldn't sign in" and clears the field. Once signed in, the preset reads **All of San Roque** (the account's own barangay) and the topic list offers only San Roque. Coverage shows `brgy.san-roque.#` and the feed says "Listening for reports". |
 | 3 | B | Report, sign in as `resident-test`, pick San Roque, `Purok 3`, Noise, type a description, **Send report** | Toast "Report sent"; the report appears under Your reports as Received |
 | 4 | A | Watch the feed | The report appears with `resident-test` as reporter; the Open count goes up |
 | 5 | A | Type a note, click **Respond** | Badge turns Responding; toast confirms |
@@ -172,22 +177,22 @@ Resolve or withdraw anything you created by hand. If a step fails, note the step
 
 ## Demo Script
 
-Delete `sumbong.db*` first for a clean start, then create the accounts: `python users.py desk-password`, and `python users.py add <id> --barangay san-roque` for `tanod-a`, `tanod-b` and `captain`. Each responder asks for its PIN when it starts. Each step names the terminal to type in.
+Delete `sumbong.db*` first for a clean start, then create the accounts: `python users.py desk-password`, then `python users.py add --barangay san-roque --position tanod` twice (SR-T01 is Tanod A, SR-T02 is Tanod B) and `python users.py add --barangay san-roque --position captain` (SR-CAPT). Each responder asks for its PIN when it starts. Each step names the terminal to type in.
 
 1. **Empty status screen.** Run `python broker.py`, then `python status.py --watch`. It shows "No reports yet."
 2. **Connect Tanod A, Tanod B, Captain and the city desk**, plus one resident:
    ```
-   python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#
-   python responder.py --id tanod-b --sub brgy.san-roque.purok-5.# --sub brgy.san-roque.advisory
-   python responder.py --id captain --sub brgy.san-roque.purok-3.#
+   python responder.py --id SR-T01 --sub brgy.san-roque.purok-3.#
+   python responder.py --id SR-T02 --sub brgy.san-roque.purok-5.# --sub brgy.san-roque.advisory
+   python responder.py --id SR-CAPT --sub brgy.san-roque.purok-3.#
    python responder.py --role desk --sub city.iloilo.escalated.#
    python resident.py --id resident1
    ```
 3. **The anonymous noise report in Purok 3 reaches Tanod A and the Captain only.** As Resident 1: `report san-roque purok-3 noise anon Loud karaoke past midnight`. Tanod A and the Captain print it "from anonymous". Tanod B (Purok 5) and the city desk get nothing (noise is NORMAL).
-4. **Tanod A sends RESPONDING and Resident 1 sees it.** As Tanod A: `respond <report_id> on the way`. Resident 1 prints "is now RESPONDING by tanod-a - on the way".
+4. **Tanod A sends RESPONDING and Resident 1 sees it.** As Tanod A: `respond <report_id> on the way`. Resident 1 prints "is now RESPONDING by SR-T01 - on the way".
 5. **Tanod A sends RESOLVED and Resident 1 sees it.** As Tanod A: `resolve <report_id> settled`. Resident 1 prints "is now RESOLVED".
 6. **Close Tanod B, then send a fire report and an advisory.** Tanod B: `quit`. Captain: `advisory san-roque Clean-up drive on Saturday`. Then Resident 1: `report san-roque purok-5 fire Smoke near the chapel`. The city desk gets the fire report at once (URGENT).
-7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id tanod-b` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
+7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id SR-T02` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
 8. **(Bonus) A lost ACK is resent.** In a new terminal, start a bare client that files a report and never ACKs anything:
    ```
    python -c "import socket;s=socket.create_connection(('127.0.0.1',5050));s.sendall(b'HELLO raw-res resident\nREPORT brgy.san-roque.purok-3.noise N lost ack demo\n');[print(l,end='',flush=True) for l in s.makefile()]"

@@ -126,6 +126,12 @@ describe("Coverage (subscriptions)", () => {
     expect(screen.getByRole("button", { name: /all of jaro/i })).toBeDisabled();
   });
 
+  it("takes the account's spelling of the ID from the broker", async () => {
+    await signIn("sr-t01");
+    gw.emit("ME SR-T01 responder san-roque");
+    expect(await screen.findByLabelText("Connected as SR-T01")).toBeInTheDocument();
+  });
+
   it("a barangay account is offered only its own barangay", async () => {
     await signIn();
     expect(screen.getByRole("button", { name: /all of jaro/i })).toBeInTheDocument(); // until ME arrives

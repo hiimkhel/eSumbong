@@ -7,7 +7,8 @@ import { FieldError, LogoMark } from "./ui.jsx";
 //   secretLabel: the role signs in with a PIN/password (e.g. "PIN"), asked for here
 //   and never stored; fixedId: the role has one account, so no ID is asked (the desk).
 // onConnect(id, role, secret) may throw; its message is shown (e.g. a wrong PIN).
-export default function SignIn({ title, lead, foot, placeholder, roles, defaultId, defaultRole, reason, onConnect }) {
+// idHint: the line under the ID field (default: the resident's).
+export default function SignIn({ title, lead, foot, placeholder, idHint, roles, defaultId, defaultRole, reason, onConnect }) {
   const [id, setId] = useState(defaultId || "");
   const [role, setRole] = useState(defaultRole || roles?.[0]?.value);
   const [secret, setSecret] = useState("");
@@ -94,7 +95,7 @@ export default function SignIn({ title, lead, foot, placeholder, roles, defaultI
               </span>
               {errors.id
                 ? <FieldError>{errors.id}</FieldError>
-                : <span className="field-hint">One word, no spaces. Use the same ID to see your reports again.</span>}
+                : <span className="field-hint">{idHint || "One word, no spaces. Use the same ID to see your reports again."}</span>}
             </label>
           )}
           {secretLabel && (

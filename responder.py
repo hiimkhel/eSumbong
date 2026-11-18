@@ -4,8 +4,8 @@ Purpose: Responder CLI for tanods, captain, and city desk; ACK, STATUS, duplicat
 
 Run (broker first), one terminal per person. Each asks for the account's PIN,
 or for the desk the desk password (accounts: python users.py, see README):
-    python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#
-    python responder.py --id captain --sub brgy.san-roque.#
+    python responder.py --id SR-T01 --sub brgy.san-roque.purok-3.#
+    python responder.py --id SR-CAPT --sub brgy.san-roque.#
     python responder.py --role desk --sub city.iloilo.escalated.#
 
 Commands:
@@ -74,7 +74,7 @@ def advisory_line(rest):
 
 def main():
     parser = argparse.ArgumentParser(description="eSumbong responder (tanod, captain, city desk)")
-    parser.add_argument("--id", help=f"your ID, one word, e.g. tanod-a (the desk is always {config.DESK_ID})")
+    parser.add_argument("--id", help=f"your ID, one word, e.g. SR-T01 (the desk is always {config.DESK_ID})")
     parser.add_argument("--role", choices=("responder", "desk"), default="responder")
     parser.add_argument("--sub", action="append", default=[], metavar="PATTERN",
                         help="subscribe on start (repeatable), e.g. brgy.san-roque.#")

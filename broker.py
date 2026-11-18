@@ -286,6 +286,8 @@ class Broker:
                 session.send(f"ERR {exc}")
                 session.refuse()
                 return
+        if user:
+            client_id = user["client_id"]  # the account's spelling (sr-t01 signs in as SR-T01)
         session.client_id = client_id
         session.role = role
         session.barangay = user["barangay"] if user else None

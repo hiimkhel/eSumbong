@@ -83,6 +83,8 @@ export default function Responder() {
     onEvent: (event) => {
       if (event.command === "ME") {
         setAccountBarangay(event.barangay);
+        // The account's own spelling: someone who typed sr-t01 is SR-T01.
+        setIdentity((prev) => (event.clientId && prev.id !== event.clientId ? { ...prev, id: event.clientId } : prev));
       } else if (event.command === "UPDATED") {
         // The broker accepted our STATUS; only now does the card change.
         const note = sentNotes.current.get(event.reportId);
@@ -243,7 +245,8 @@ export default function Responder() {
           title="Responder desk"
           lead="Sign in to receive reports from the barangays you cover and update their status."
           foot="Residents see each status update you send."
-          placeholder="e.g. tanod-jaro-1"
+          placeholder="e.g. SR-T01"
+          idHint="The ID your captain gave you, e.g. SR-T01 (San Roque, tanod 1)."
           roles={ROLES.map((r) => (r.fixedId ? { ...r, fixedId: deskId } : r))}
           defaultId={conn.lastId?.id}
           defaultRole={conn.lastId?.role || identity.role}

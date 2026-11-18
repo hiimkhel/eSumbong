@@ -100,7 +100,8 @@ def reset_failures():
 
 def check_login(client_id, role, secret, now=None):
     """The account dict for a valid responder/desk sign-in; raises AuthError.
-    Residents need no account and get None."""
+    The ID is matched without regard to case; the account's client_id is its
+    real spelling. Residents need no account and get None."""
     global _DUMMY_HASH
     if role == "resident":
         return None
@@ -108,7 +109,8 @@ def check_login(client_id, role, secret, now=None):
         raise AuthError(f"{role}s must sign in with "
                         + ("the desk password" if role == "desk" else "their PIN"))
     now = time.time() if now is None else now
-    left = _locked_for(client_id, now)
+    key = client_id.lower()  # IDs are matched without regard to case
+    left = _locked_for(key, now)
     if left:
         raise AuthError(f"too many failed sign-ins for {client_id[:64]}; "
                         f"try again in {max(1, round(left / 60))} min")
@@ -117,11 +119,11 @@ def check_login(client_id, role, secret, now=None):
         if _DUMMY_HASH is None:
             _DUMMY_HASH = hash_secret("not-a-real-secret")
         verify_secret(secret, _DUMMY_HASH)
-        _record_failure(client_id, now)
+        _record_failure(key, now)
         raise AuthError(LOGIN_FAILED)
     if not verify_secret(secret, user["secret_hash"]) or user["role"] != role:
-        _record_failure(client_id, now)
+        _record_failure(key, now)
         raise AuthError(LOGIN_FAILED)
     with _failures_lock:
-        _failures.pop(client_id, None)
+        _failures.pop(key, None)
     return user
