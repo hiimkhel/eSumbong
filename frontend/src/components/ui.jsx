@@ -1,5 +1,21 @@
-import { Check } from "lucide-react";
+import { AlertCircle, Check, Eye, EyeOff, Undo2 } from "lucide-react";
 import { categoryMeta } from "../lib/format.js";
+
+// Inline error under a form field, used instead of the browser's own bubble.
+export function FieldError({ children }) {
+  return <span className="field-error" role="alert"><AlertCircle size={14} /> <span>{children}</span></span>;
+}
+
+// "Show 2 hidden reports" / "Hide hidden reports" under a list. Nothing when none are hidden.
+export function HiddenToggle({ count, open, onToggle }) {
+  if (!count) return null;
+  return (
+    <button type="button" className="hidden-toggle" aria-expanded={open} onClick={onToggle}>
+      {open ? <EyeOff size={15} /> : <Eye size={15} />}
+      {open ? "Hide hidden reports" : `Show ${count} hidden report${count === 1 ? "" : "s"}`}
+    </button>
+  );
+}
 
 // The Rise logo: amber signal dot over a white and a Signal Sky chevron.
 // variant "light" is the white tile used on navy backgrounds, as on the brand board.
@@ -28,7 +44,7 @@ export function CategoryTile({ category, urgent, size = 20 }) {
   );
 }
 
-const STATUS_LABEL = { RECEIVED: "Received", RESPONDING: "Responding", RESOLVED: "Resolved" };
+const STATUS_LABEL = { RECEIVED: "Received", RESPONDING: "Responding", RESOLVED: "Resolved", WITHDRAWN: "Withdrawn" };
 
 export function StatusBadge({ status = "RECEIVED" }) {
   return <span className={`badge badge-${status.toLowerCase()}`}>{STATUS_LABEL[status] || status}</span>;
@@ -37,7 +53,15 @@ export function StatusBadge({ status = "RECEIVED" }) {
 const STEPS = ["RECEIVED", "RESPONDING", "RESOLVED"];
 
 // Received -> Responding -> Resolved, with the current step highlighted.
+// A withdrawn report never went through the steps, so it gets a note instead.
 export function StatusStepper({ status = "RECEIVED" }) {
+  if (status === "WITHDRAWN") {
+    return (
+      <p className="withdrawn-note">
+        <Undo2 size={16} /> Withdrawn by the resident before anyone responded.
+      </p>
+    );
+  }
   const index = Math.max(0, STEPS.indexOf(status));
   const finished = status === "RESOLVED";
   return (

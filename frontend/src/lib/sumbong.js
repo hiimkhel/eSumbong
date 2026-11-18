@@ -41,7 +41,20 @@ export function parseLine(line) {
     try { body = JSON.parse(parts[4] || ""); } catch { /* left null */ }
     return { command, msgId: parts[1], topic: parts[2], priority: parts[3], body, raw: line };
   }
+  if (command === "HIST") {
+    // Reply to HISTORY: one report's current state. Not ACKed.
+    const parts = splitMax(line, 4);
+    let body = null;
+    try { body = JSON.parse(parts[3] || ""); } catch { /* left null */ }
+    return { command, topic: parts[1], priority: parts[2], body, raw: line };
+  }
+  if (command === "HISTEND") return { command, count: Number(splitMax(line, 2)[1]) || 0, raw: line };
+  if (command === "SUBS") return { command, patterns: line.split(" ").slice(1).filter(Boolean), raw: line };
   if (command === "REPORTED") return { command, reportId: splitMax(line, 2)[1], raw: line };
+  if (command === "UPDATED") {
+    const parts = splitMax(line, 3);
+    return { command, reportId: parts[1], status: parts[2], raw: line };
+  }
   if (command === "ERR") return { command, reason: splitMax(line, 2)[1] || "", raw: line };
   return { command, raw: line };
 }
@@ -54,6 +67,41 @@ export function oneLine(text) {
 // A topic level: lowercase letters, digits, hyphen.
 export function topicLevel(text) {
   return String(text).trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
+// Same rules as topic_matcher.matches(): * is one level, # is the rest (or nothing).
+export function topicMatches(pattern, topic) {
+  const p = pattern.split(".");
+  const t = topic.split(".");
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] === "#") return i === p.length - 1;
+    if (i >= t.length) return false;
+    if (p[i] !== "*" && p[i] !== t[i]) return false;
+  }
+  return p.length === t.length;
+}
+
+// Whether subscription patterns still reach a report: its incident topic, its
+// status topic, or (once escalated) its city escalation topic. Mirrors the
+// broker's HISTORY rule.
+export function reportCovered(patterns, reportId, report) {
+  const topics = [report.topic, `report.${reportId}.status`];
+  if (report.escalated && report.topic) topics.push(`city.iloilo.escalated.${report.topic.split(".")[1]}`);
+  return topics.some((t) => t && patterns.some((p) => topicMatches(p, t)));
+}
+
+// Sign-in memory. sessionStorage keeps a tab signed in across reloads and the
+// back button; localStorage only pre-fills the last ID used on this browser.
+// Storage can be unavailable (private windows), so every access is guarded.
+export function storageGet(kind, key) {
+  try { return JSON.parse(window[kind].getItem(key)); } catch { return null; }
+}
+
+export function storageSet(kind, key, value) {
+  try {
+    if (value == null) window[kind].removeItem(key);
+    else window[kind].setItem(key, JSON.stringify(value));
+  } catch { /* storage unavailable: nothing is remembered */ }
 }
 
 export class Connection {

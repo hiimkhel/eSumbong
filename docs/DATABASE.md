@@ -13,7 +13,7 @@ Only store.py runs SQL. status.py may read the database read-only. Timestamps ar
 | description | TEXT | |
 | reporter_id | TEXT | never sent to subscribers if anonymous |
 | anonymous | INTEGER | 0/1 |
-| status | TEXT | RECEIVED/RESPONDING/RESOLVED |
+| status | TEXT | RECEIVED/RESPONDING/RESOLVED/WITHDRAWN |
 | assigned_to | TEXT | first responder to send RESPONDING |
 | escalated | INTEGER | 0/1 |
 | created_at | REAL | |
@@ -56,8 +56,8 @@ PRIMARY KEY (msg_id, client_id)
 | --- | --- | --- |
 | id | INTEGER | primary key autoincrement |
 | report_id | TEXT | |
-| status | TEXT | |
-| responder_id | TEXT | |
+| status | TEXT | RESPONDING/RESOLVED/WITHDRAWN, or ESCALATED for an escalation |
+| responder_id | TEXT | null for an escalation |
 | note | TEXT | |
 | time | REAL | |
 
