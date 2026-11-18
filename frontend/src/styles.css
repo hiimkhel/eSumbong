@@ -310,7 +310,25 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
 /* ---------- Device mockup (hero) ----------
    A modern phone: metal frame, side buttons, Dynamic Island, status bar,
    and a screen that mirrors the real resident app. Fixed light-mode colours. */
-.device-stage { position: relative; display: grid; place-items: center; padding: 24px 0; }
+.device-stage { position: relative; display: grid; place-items: center; padding: 24px 0 56px; perspective: 1600px; }
+
+/* Three-quarter pose: leaning right, turned so the right-hand metal edge shows */
+.device-float { transform-style: preserve-3d; animation: device-bob 7s ease-in-out infinite; }
+@keyframes device-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+.device-shadow {
+  position: absolute; bottom: 10px; left: 50%;
+  width: 230px; height: 34px; margin-left: -100px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(0, 4, 15, 0.65), transparent 70%);
+  filter: blur(6px);
+  animation: shadow-breathe 7s ease-in-out infinite;
+}
+/* Laptops with short screens: keep the whole tilted phone in view */
+@media (min-width: 1001px) and (max-height: 900px) {
+  .device-stage { margin: -48px 0; }
+  .device-float, .device-shadow { scale: 0.84; }
+}
+@keyframes shadow-breathe { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.9); opacity: 0.75; } }
 .device-glow {
   position: absolute; width: 420px; height: 420px; border-radius: 50%;
   background: radial-gradient(circle, rgba(91, 141, 239, 0.45), transparent 65%);
@@ -324,16 +342,33 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
   background: linear-gradient(145deg, #3B4560 0%, #161C2E 38%, #0A0F1E 62%, #2A3350 100%);
   box-shadow:
     inset 0 0 0 1.5px rgba(255, 255, 255, 0.14),
-    inset 0 0 0 4px #05080F,
-    0 50px 80px -30px rgba(0, 0, 0, 0.75),
-    0 30px 60px -20px rgba(11, 27, 63, 0.9);
+    inset 0 0 0 4px #05080F;
+  transform-style: preserve-3d;
+  transform: rotateZ(10deg) rotateY(-17deg) rotateX(4deg);
+}
+/* Body thickness: metal layers behind the face show as the side edge */
+.device::before, .device::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+}
+.device::before {
+  transform: translateZ(-10px);
+  background: linear-gradient(90deg, #2A3350, #6E7FA6 70%, #9AAAD0 92%, #4A5878);
+}
+.device::after {
+  transform: translateZ(-20px);
+  background: linear-gradient(90deg, #1D2440, #55658C 75%, #7D8DB5 95%, #39466A);
+  box-shadow: 30px 40px 60px -20px rgba(0, 4, 15, 0.7);
 }
 /* Side buttons: action + volume on the left, power on the right */
 .device-btn { position: absolute; width: 4px; border-radius: 2px; background: linear-gradient(90deg, #1A2033, #3B4560); }
 .device-btn.action { left: -3px; top: 104px; height: 26px; }
 .device-btn.vol-up { left: -3px; top: 150px; height: 46px; }
 .device-btn.vol-down { left: -3px; top: 206px; height: 46px; }
-.device-btn.power { right: -3px; top: 170px; height: 72px; background: linear-gradient(270deg, #1A2033, #3B4560); }
+.device-btn.power {
+  right: -4px; top: 170px; height: 72px;
+  background: linear-gradient(270deg, #5B6B90, #9AAAD0);
+  transform: translateZ(-10px); /* sits on the visible side edge */
+}
 
 .device-screen {
   position: relative; height: 100%;
@@ -341,6 +376,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
   border-radius: 43px; overflow: hidden;
   background: #F2F6FC; color: #0B1B3F;
   font-family: var(--font-text);
+  /* One flat surface in front of the metal edge, so it clips its content */
+  transform: translateZ(1px); transform-style: flat; isolation: isolate;
+  -webkit-backface-visibility: hidden; backface-visibility: hidden;
 }
 .device-screen::after { /* glass glare */
   content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
@@ -419,8 +457,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
   position: absolute; top: 50px; left: 8px; right: 8px; z-index: 6;
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border-radius: 20px;
-  background: rgba(246, 249, 254, 0.94); color: #0B1B3F;
-  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  background: #F6F9FE; color: #0B1B3F;
+  border: 1px solid rgba(11, 27, 63, 0.06);
   box-shadow: 0 14px 30px -10px rgba(0, 0, 0, 0.55);
   animation: drop-in 0.7s cubic-bezier(.2, .9, .3, 1.2) 0.6s both;
 }

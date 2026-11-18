@@ -8,7 +8,9 @@ export default function PhoneMockup() {
   return (
     <div className="device-stage" aria-hidden="true">
       <div className="device-glow" />
+      <div className="device-shadow" />
 
+      <div className="device-float">
       <div className="device">
         <span className="device-btn action" />
         <span className="device-btn vol-up" />
@@ -88,7 +90,7 @@ export default function PhoneMockup() {
           <div className="app-home-indicator" />
         </div>
       </div>
-
+      </div>
     </div>
   );
 }
