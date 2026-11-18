@@ -218,6 +218,7 @@ class GatewayTest(unittest.TestCase):
 
     def test_send_rejects_commands_a_browser_may_not_send(self):
         session, _ = self.connect("res-1", "resident")
+        self.send(session, "WHOAMI")  # allowed
         for line in ["HELLO someone-else desk", "MSG 1 a NORMAL {}", "report lowercase"]:
             body = self.send(session, line, expect=400)
             self.assertIn("not allowed", body["error"])

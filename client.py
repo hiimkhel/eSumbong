@@ -5,13 +5,11 @@ Purpose: Shared line client for resident.py and responder.py.
 Connects to the broker, sends HELLO (with the PIN or desk password for
 responders and the desk, see auth.py), answers PING, ACKs every MSG and drops
 duplicates: the broker resends a message until it is ACKed (at-least-once
-delivery), so the same msg_id can arrive twice. drop_acks=N skips the first
-N ACKs on purpose, to show a retry and "duplicate ignored" in the demo.
+delivery), so the same msg_id can arrive twice.
 
 Every broker line is handed to handler(kind, data):
     "MSG"        {"msg_id", "topic", "priority", "body"}  (new messages only)
     "DUPLICATE"  msg_id of a message already seen
-    "NOTE"       text from this client itself (e.g. a skipped ACK)
     "CLOSED"     None, when the connection ends
     anything else: the command word (REPORTED, ERR, SUBS, ...) and the rest of the line
 """
@@ -27,12 +25,10 @@ import config
 
 class Client:
 
-    def __init__(self, client_id, role, handler, host=config.HOST, port=config.PORT, drop_acks=0,
-                 secret=None):
+    def __init__(self, client_id, role, handler, host=config.HOST, port=config.PORT, secret=None):
         self.client_id = client_id
         self.role = role
         self.handler = handler
-        self.drop_acks = drop_acks
         self.seen = set()  # msg_ids already shown
         self.closed = threading.Event()
         self._send_lock = threading.Lock()
@@ -81,12 +77,7 @@ class Client:
         except json.JSONDecodeError:
             body = {"description": body}
         # ACK first, duplicates included, so the broker stops resending.
-        if self.drop_acks > 0:
-            self.drop_acks -= 1
-            self.handler("NOTE", f"not ACKing {msg_id} on purpose (simulated lost ACK); "
-                                 f"the broker should resend it in about {config.RETRY_SECONDS}s")
-        else:
-            self.send(f"ACK {msg_id}")
+        self.send(f"ACK {msg_id}")
         if msg_id in self.seen:
             self.handler("DUPLICATE", msg_id)
             return

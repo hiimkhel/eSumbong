@@ -56,6 +56,11 @@ export function parseLine(line) {
     const parts = splitMax(line, 3);
     return { command, reportId: parts[1], status: parts[2], raw: line };
   }
+  if (command === "ME") {
+    // Reply to WHOAMI. barangay is null for accounts that cover all of Jaro.
+    const [, clientId, role, barangay] = line.split(" ");
+    return { command, clientId, role, barangay: barangay && barangay !== "-" ? barangay : null, raw: line };
+  }
   if (command === "ERR") return { command, reason: splitMax(line, 2)[1] || "", raw: line };
   return { command, raw: line };
 }

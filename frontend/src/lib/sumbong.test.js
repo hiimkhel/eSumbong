@@ -30,6 +30,11 @@ describe("parseLine", () => {
     expect(parseLine("SUBS").patterns).toEqual([]);
   });
 
+  it("parses ME (reply to WHOAMI)", () => {
+    expect(parseLine("ME tanod-a responder san-roque")).toMatchObject({ clientId: "tanod-a", role: "responder", barangay: "san-roque" });
+    expect(parseLine("ME city desk -").barangay).toBeNull();
+  });
+
   it("parses REPORTED, POSTED, UPDATED and ERR", () => {
     expect(parseLine("REPORTED abc").reportId).toBe("abc");
     expect(parseLine("POSTED adv1").advisoryId).toBe("adv1");

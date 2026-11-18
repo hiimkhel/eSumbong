@@ -7,7 +7,6 @@ or for the desk the desk password (accounts: python users.py, see README):
     python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#
     python responder.py --id captain --sub brgy.san-roque.#
     python responder.py --role desk --sub city.iloilo.escalated.#
-    python responder.py --id tanod-b --sub brgy.san-roque.# --drop-ack 1   (bonus: lost ACK)
 
 Commands:
     sub <pattern> / unsub <pattern> / subs     what you receive
@@ -43,8 +42,10 @@ def handle(kind, data):
         client.say(f"({data} report(s))")
     elif kind == "DUPLICATE":
         client.say(f"duplicate {data} ignored (already shown; ACKed again so the broker stops resending)")
-    elif kind == "NOTE":
-        client.say(f"({data})")
+    elif kind == "ME":
+        _, _, barangay = data.split(" ")
+        where = config.BARANGAYS.get(barangay, barangay) if barangay != "-" else f"all of {config.DISTRICT_NAME}"
+        client.say(f"Signed in. This account covers {where}.")
     elif kind == "ERR":
         client.say(f"! {data}")
         if data.startswith("sign-in failed") or data.endswith("must sign in with their PIN") \
@@ -77,8 +78,6 @@ def main():
     parser.add_argument("--role", choices=("responder", "desk"), default="responder")
     parser.add_argument("--sub", action="append", default=[], metavar="PATTERN",
                         help="subscribe on start (repeatable), e.g. brgy.san-roque.#")
-    parser.add_argument("--drop-ack", type=int, default=0, metavar="N",
-                        help="skip the first N ACKs on purpose to show a retry and a duplicate")
     parser.add_argument("--host", default=config.HOST)
     parser.add_argument("--port", type=int, default=config.PORT)
     args = parser.parse_args()
@@ -94,8 +93,8 @@ def main():
     if not secret or " " in secret:
         sys.exit("! a PIN or password is one word with no spaces")
 
-    c = client.Client(args.id, args.role, handle, args.host, args.port, drop_acks=args.drop_ack,
-                      secret=secret)
+    c = client.Client(args.id, args.role, handle, args.host, args.port, secret=secret)
+    c.send("WHOAMI")
     for pattern in args.sub:
         c.send(f"SUB {pattern}")
     c.send("SUBS")

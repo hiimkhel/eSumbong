@@ -141,6 +141,7 @@ class Broker:
             "PONG": self.cmd_pong,
             "SUBS": self.cmd_subs,
             "HISTORY": self.cmd_history,
+            "WHOAMI": self.cmd_whoami,
         }
 
     # ------------------------------------------------------------ lifecycle
@@ -518,6 +519,14 @@ class Broker:
         if report["escalated"]:
             topics.append(topic_matcher.escalation_topic(report["barangay"]))
         return any(topic_matcher.any_match(patterns, t) for t in topics)
+
+    def cmd_whoami(self, session, line):
+        """WHOAMI -> ME <client_id> <role> <barangay>, with "-" when the account
+        covers all of Jaro (or is not a barangay account). Lets a client offer
+        only the coverage its account allows."""
+        if line != "WHOAMI":
+            raise CommandError("usage: WHOAMI")
+        session.send(f"ME {session.client_id} {session.role} {session.barangay or '-'}")
 
     def cmd_ping(self, session, line):
         session.send("PONG")

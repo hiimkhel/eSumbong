@@ -21,6 +21,8 @@
 | Client → Broker | HISTORY | Ask for the current state of reports this client's subscriptions cover (latest 50) |
 | Broker → Client | HIST <topic> <priority> <body> | One report, oldest first; same body as MSG plus created_at (and anonymous for the reporter, note if any). Not ACKed |
 | Broker → Client | HISTEND <count> | End of the HISTORY reply |
+| Client → Broker | WHOAMI | Ask who this connection signed in as |
+| Broker → Client | ME <client_id> <role> <barangay> | Reply to WHOAMI; barangay is the one a responder account is limited to, or `-` for none |
 | Either way | PING / PONG | Heartbeat |
 | Broker → Client | ERR <reason> | Malformed command or unknown report |
 

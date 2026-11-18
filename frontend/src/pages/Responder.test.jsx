@@ -38,7 +38,7 @@ async function signIn(id = "tanod-a", role = "responder") {
   renderPage();
   await fillSignIn(id, role);
   await screen.findByRole("heading", { name: "Incoming reports" });
-  await waitFor(() => expect(gw.sent).toEqual(["SUBS", "HISTORY"]));
+  await waitFor(() => expect(gw.sent).toEqual(["WHOAMI", "SUBS", "HISTORY"]));
 }
 
 const report = (id, over = {}) => ({
@@ -124,6 +124,17 @@ describe("Coverage (subscriptions)", () => {
     await user.click(screen.getByRole("button", { name: /all of jaro/i }));
     await waitFor(() => expect(gw.lastSent("SUB")).toBe("SUB brgy.#"));
     expect(screen.getByRole("button", { name: /all of jaro/i })).toBeDisabled();
+  });
+
+  it("a barangay account is offered only its own barangay", async () => {
+    await signIn();
+    expect(screen.getByRole("button", { name: /all of jaro/i })).toBeInTheDocument(); // until ME arrives
+    gw.emit("ME tanod-a responder san-roque");
+    expect(screen.queryByRole("button", { name: /all of jaro/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /all of san roque/i }));
+    await waitFor(() => expect(gw.lastSent("SUB")).toBe("SUB brgy.san-roque.#"));
+    await user.click(screen.getByLabelText("Topic pattern"));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["San Roquebrgy.san-roque.#"]);
   });
 
   it("a barangay account's refused SUB explains why", async () => {

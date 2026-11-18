@@ -23,10 +23,13 @@ const ROLES = [
 ];
 
 // What each role may subscribe to (the broker enforces this; see escalation.py).
-const PRESETS = {
-  responder: [{ pattern: "brgy.#", label: "All of Jaro" }],
-  desk: [{ pattern: "city.iloilo.escalated.#", label: "Escalated to the city" }],
-};
+// A responder account tied to a barangay (users.py --barangay) may only cover that
+// barangay, so its preset is that barangay; other responders get all of Jaro.
+function presetsFor(role, barangay) {
+  if (role === "desk") return [{ pattern: "city.iloilo.escalated.#", label: "Escalated to the city" }];
+  if (barangay) return [{ pattern: `brgy.${barangay}.#`, label: `All of ${barangayName(barangay)}` }];
+  return [{ pattern: "brgy.#", label: "All of Jaro" }];
+}
 const PATTERN_FOR = {
   responder: (id) => `brgy.${id}.#`,
   desk: (id) => `city.iloilo.escalated.${id}`,
@@ -69,6 +72,7 @@ export default function Responder() {
   const [advisories, setAdvisories] = useState([]);
   const postingAdvisory = useRef(null);
   const [deskId, setDeskId] = useState(ROLES[1].fixedId); // config.DESK_ID, from /api/config
+  const [accountBarangay, setAccountBarangay] = useState(null); // from the broker's ME reply
   const sentNotes = useRef(new Map()); // report_id -> note sent with STATUS, until UPDATED
 
   const conn = useConnection({
@@ -77,7 +81,9 @@ export default function Responder() {
       if (status !== "online") setSubs([]);
     },
     onEvent: (event) => {
-      if (event.command === "UPDATED") {
+      if (event.command === "ME") {
+        setAccountBarangay(event.barangay);
+      } else if (event.command === "UPDATED") {
         // The broker accepted our STATUS; only now does the card change.
         const note = sentNotes.current.get(event.reportId);
         sentNotes.current.delete(event.reportId);
@@ -217,9 +223,11 @@ export default function Responder() {
     setReports(new Map());
     seen.current = new Set();
     lastSub.current = null;
+    setAccountBarangay(null);
     await conn.connect(id, role, secret);
     setIdentity({ id, role });
     try {
+      await conn.send("WHOAMI");   // which barangay this account may cover
       await conn.send("SUBS");     // coverage the broker kept for this ID
       await conn.send("HISTORY");  // reports that coverage already reaches
     } catch (err) {
@@ -353,7 +361,9 @@ export default function Responder() {
                 <form className="sub-form" onSubmit={(e) => { e.preventDefault(); subscribe(pattern); }}>
                   <label className="sr-only" htmlFor="pattern">Topic pattern</label>
                   <Combobox id="pattern" placeholder={PATTERN_FOR[role.value]("san-roque")} value={pattern} onChange={setPattern}
-                    options={barangayList().map((b) => ({ value: b.id, label: b.name, text: PATTERN_FOR[role.value](b.id), hint: PATTERN_FOR[role.value](b.id) }))} />
+                    options={barangayList()
+                      .filter((b) => !accountBarangay || role.value !== "responder" || b.id === accountBarangay)
+                      .map((b) => ({ value: b.id, label: b.name, text: PATTERN_FOR[role.value](b.id), hint: PATTERN_FOR[role.value](b.id) }))} />
                   <button type="submit" className="btn btn-primary" aria-label="Subscribe"><Plus size={18} /></button>
                 </form>
                 {subs.length > 0 ? (
@@ -371,7 +381,7 @@ export default function Responder() {
                   <p className="card-sub coverage-help">Not subscribed to anything yet.</p>
                 )}
                 <div className="presets">
-                  {PRESETS[role.value].map(({ pattern: p, label }) => (
+                  {presetsFor(role.value, accountBarangay).map(({ pattern: p, label }) => (
                     <button key={p} type="button" className="preset" disabled={subs.includes(p)} onClick={() => subscribe(p)}>
                       <span>{label}</span>
                       <code>{p}</code>

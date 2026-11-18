@@ -51,7 +51,7 @@ CONTENT_TYPES = {
     ".woff2": "font/woff2",
 }
 # Commands a browser may send after the gateway has sent HELLO for it.
-ALLOWED_COMMANDS = {"SUB", "UNSUB", "SUBS", "HISTORY", "REPORT", "WITHDRAW", "ADVISORY", "ACK", "STATUS", "PING", "PONG"}
+ALLOWED_COMMANDS = {"SUB", "UNSUB", "SUBS", "HISTORY", "WHOAMI", "REPORT", "WITHDRAW", "ADVISORY", "ACK", "STATUS", "PING", "PONG"}
 SSE_KEEPALIVE_SECONDS = 15
 MAX_BODY_BYTES = 16 * 1024
 CLOSED = object()  # sentinel placed on a session queue when the broker link ends

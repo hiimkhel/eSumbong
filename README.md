@@ -37,7 +37,7 @@ python users.py add tanod-b --barangay san-roque
 python users.py add captain --barangay san-roque
 ```
 
-Run the backend tests (169 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
+Run the backend tests (170 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
 
 ```
 python -m unittest discover -s tests
@@ -68,7 +68,7 @@ Type `help` in a client for its commands. The main ones:
 - **Resident**: `report <barangay> <purok> <category> [anon] <what happened>`, `withdraw <report_id>`, `follow <barangay>`, `mine`.
 - **Responder or desk**: `respond <report_id> [note]`, `resolve <report_id> [note]`, `advisory <barangay> [urgent] <text>`, `sub` / `unsub <pattern>`, `history`.
 
-Settings such as the port, timers and the barangay list are in [config.py](config.py).
+Settings such as the port, timers and the barangay list are in [config.py](config.py). The escalation timers are **demo values** (2 min without a response, 3 min unresolved, closed reports hidden from HISTORY after 10 min) so the demo fits in a class period. For real use, set `ESCALATE_SECONDS = 1800`, `UNRESOLVED_ESCALATE_SECONDS = 86400` and `RESOLVED_HIDE_SECONDS = 604800` (30 min, 24 h, 7 days) and restart the broker.
 
 ## Accounts
 
@@ -149,7 +149,7 @@ The test writes to the live database. Its resident ID (`smoke-res-<tag>`) and pu
 | # | Window | Action | Expected |
 | --- | --- | --- | --- |
 | 1 | A | Open `<URL>` | Home page loads; the bar shows Report and Responder desk |
-| 2 | A | Responder desk: first try `tanod-a` (Responder) with a wrong PIN, then the right one. Subscribe to `brgy.san-roque.#` | The wrong PIN shows "Couldn't sign in" and clears the field. Once signed in, Coverage shows `brgy.san-roque.#` and the feed says "Listening for reports". (**All of Jaro** is refused for a San Roque account.) |
+| 2 | A | Responder desk: first try `tanod-a` (Responder) with a wrong PIN, then the right one. Subscribe to `brgy.san-roque.#` | The wrong PIN shows "Couldn't sign in" and clears the field. Once signed in, the preset reads **All of San Roque** (the account's own barangay) and the topic list offers only San Roque. Coverage shows `brgy.san-roque.#` and the feed says "Listening for reports". |
 | 3 | B | Report, sign in as `resident-test`, pick San Roque, `Purok 3`, Noise, type a description, **Send report** | Toast "Report sent"; the report appears under Your reports as Received |
 | 4 | A | Watch the feed | The report appears with `resident-test` as reporter; the Open count goes up |
 | 5 | A | Type a note, click **Respond** | Badge turns Responding; toast confirms |
@@ -168,7 +168,7 @@ The test writes to the live database. Its resident ID (`smoke-res-<tag>`) and pu
 
 Also check the city desk: sign out in window A, choose **City desk**, and confirm it asks only for the password, then sign in with it.
 
-Resolve or withdraw anything you created by hand. If a step fails, note the step number and open **Protocol log** at the bottom of the page: it shows every line sent and received.
+Resolve or withdraw anything you created by hand. If a step fails, note the step number and open **Protocol log** at the bottom of the responder desk: it shows every line sent and received (residents don't see it).
 
 ## Demo Script
 
@@ -187,8 +187,12 @@ Delete `sumbong.db*` first for a clean start, then create the accounts: `python 
 4. **Tanod A sends RESPONDING and Resident 1 sees it.** As Tanod A: `respond <report_id> on the way`. Resident 1 prints "is now RESPONDING by tanod-a - on the way".
 5. **Tanod A sends RESOLVED and Resident 1 sees it.** As Tanod A: `resolve <report_id> settled`. Resident 1 prints "is now RESOLVED".
 6. **Close Tanod B, then send a fire report and an advisory.** Tanod B: `quit`. Captain: `advisory san-roque Clean-up drive on Saturday`. Then Resident 1: `report san-roque purok-5 fire Smoke near the chapel`. The city desk gets the fire report at once (URGENT).
-7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id tanod-b --drop-ack 1` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
-8. **(Bonus) Dropped ACK shows a retry and "duplicate ignored".** Because of `--drop-ack 1`, Tanod B skipped its ACK for the fire report. About 5 seconds later the broker resends the same message and Tanod B prints "duplicate ... ignored". The status screen shows that delivery with ATTEMPTS 2.
+7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id tanod-b` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
+8. **(Bonus) A lost ACK is resent.** In a new terminal, start a bare client that files a report and never ACKs anything:
+   ```
+   python -c "import socket;s=socket.create_connection(('127.0.0.1',5050));s.sendall(b'HELLO raw-res resident\nREPORT brgy.san-roque.purok-3.noise N lost ack demo\n');[print(l,end='',flush=True) for l in s.makefile()]"
+   ```
+   It prints `REPORTED <report_id>`. As Tanod A: `respond <report_id>`. The bare client prints the status `MSG` and then the **same msg_id again about every 5 seconds**, because the broker keeps resending until it gets an ACK; the status screen shows ATTEMPTS going up. (The real clients ACK at once and drop such repeats by msg_id; `tests/test_clients.py` shows "duplicate ignored".) Close that terminal, then as Tanod A: `resolve <report_id>`.
 9. **A noise report escalates to the city desk after 2 minutes.** As Resident 1: `report san-roque purok-3 noise Barking dogs all night`. Nobody responds. About 2 minutes later (checked every 10 s) the city desk prints "ESCALATED to the city ... No response within 2 minutes". Only the desk can resolve it now: as `city`, `resolve <report_id> handled by the city`.
 
 ## Team and Responsibilities

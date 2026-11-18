@@ -201,6 +201,13 @@ class AuthBrokerTest(unittest.TestCase):
         real.sync()  # still connected
         self.assertEqual(self.broker.online_clients(), ["tanod-a"])
 
+    def test_whoami_names_the_account_and_its_barangay(self):
+        self.assertEqual(self.login("tanod-a", "responder", "1234").ask("WHOAMI"), "ME tanod-a responder san-roque")
+        self.assertEqual(self.login("roving", "responder", "5678").ask("WHOAMI"), "ME roving responder -")
+        self.assertEqual(self.login(config.DESK_ID, "desk", "city-pass-1").ask("WHOAMI"), f"ME {config.DESK_ID} desk -")
+        self.assertEqual(self.login("juan", "resident").ask("WHOAMI"), "ME juan resident -")
+        self.assertTrue(self.login("juan2", "resident").ask("WHOAMI extra").startswith("ERR usage"))
+
     def test_resident_secret_is_ignored(self):
         self.login("juan", "resident", "whatever")
 
