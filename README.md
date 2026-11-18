@@ -27,13 +27,19 @@ cd eSumbong
 
 There is nothing to install for the command-line system. The database `sumbong.db` is created when the broker first starts. To start over, stop the broker and delete `sumbong.db*`.
 
-Run the tests (117 tests, about 10 seconds):
+Run the backend tests (139 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
 
 ```
 python -m unittest discover -s tests
 ```
 
-*Optional web app:* build it once with `cd frontend`, `npm install`, `npm run build`.
+*Optional web app:* install and build it once from `frontend/` (see [Web App Scripts](#web-app-scripts-react)):
+
+```
+cd frontend
+npm install
+npm run build
+```
 
 ## How to Run (one command per terminal)
 
@@ -52,9 +58,87 @@ Type `help` in a client for its commands. The main ones:
 - **Resident**: `report <barangay> <purok> <category> [anon] <what happened>`, `withdraw <report_id>`, `follow <barangay>`, `mine`.
 - **Responder or desk**: `respond <report_id> [note]`, `resolve <report_id> [note]`, `advisory <barangay> [urgent] <text>`, `sub` / `unsub <pattern>`, `history`.
 
-*Optional web app:* with the broker running, start `python frontend/gateway.py` and open http://127.0.0.1:8080. See [frontend/README.md](frontend/README.md).
-
 Settings such as the port, timers and the barangay list are in [config.py](config.py).
+
+## Web App Scripts (React)
+
+The web app needs the broker running (terminal 1 above). Run the Python commands from the repository folder and the `npm` commands from `frontend/`.
+
+| Terminal | Folder | Command | What it does |
+| --- | --- | --- | --- |
+| 1 | repo | `python broker.py` | the broker (always first) |
+| 2 | repo | `python frontend/gateway.py` | serves the built app and bridges browsers to the broker on http://127.0.0.1:8080 (`--port`, `--broker-host`, `--broker-port`, `--host 0.0.0.0` to allow other devices on the network, `--verbose`) |
+| 3 | `frontend/` | `npm run dev` | *(while developing)* hot-reloading app on http://127.0.0.1:5173; `/api` is forwarded to the gateway on 8080 |
+
+All `npm` scripts, run in `frontend/`:
+
+| Command | When |
+| --- | --- |
+| `npm install` | once, and whenever `package.json` changes |
+| `npm run build` | before using the app through the gateway (port 8080); writes `frontend/dist/` |
+| `npm run dev` | live development server on port 5173 |
+| `npm run preview` | serve the last build on port 4173, without the gateway (UI only; `/api` calls fail) |
+| `npm test` | run the web app's tests once (about 15 seconds, no broker needed) |
+| `npm run test:watch` | rerun the tests on every save |
+
+Open http://127.0.0.1:8080 (or :5173 with `npm run dev`). The resident page is `#/resident` and the responder/desk page is `#/responder`. More in [frontend/README.md](frontend/README.md).
+
+## Testing
+
+There are three layers. The first two run on any machine with no server; the third checks a running deployment.
+
+| Layer | Command | Covers |
+| --- | --- | --- |
+| Backend unit + integration (Python) | `python -m unittest discover -s tests` | topics, store, broker, escalation, CLI clients, fault/reliability tests, and the web gateway (`tests/test_gateway.py`: HTTP API, SSE bridge, command filter, static files) |
+| Web app (React, Vitest) | `cd frontend` then `npm test` | protocol parsing, topic matching, the gateway client and its ACK/duplicate handling, every component, both hooks, and full Resident and Responder flows against a simulated gateway |
+| Live server smoke test | `python tests/live_smoke.py --url <gateway URL>` | a real gateway + broker + database, end to end |
+
+Run one Python file with `python -m unittest tests.test_gateway -v`, or one web test file with `npx vitest run src/pages/Responder.test.jsx`.
+
+### Testing procedure on the live server
+
+Do this after every deploy, or before a demo. Replace `<URL>` with the server, e.g. `http://127.0.0.1:8080`.
+
+**1. Start the server** (skip if it is already running), one per terminal:
+
+```
+python broker.py
+cd frontend && npm run build && cd ..
+python frontend/gateway.py
+```
+
+**2. Automated smoke test** (about 5 seconds, from any machine that can reach the server):
+
+```
+python tests/live_smoke.py --url <URL>
+python tests/live_smoke.py --url <URL> --full
+```
+
+Every step should print `PASS` and the last line should be `10/10 steps passed` (`12/12` with `--full`); the exit code is 1 on any failure. It checks that the app is served, connects a resident, two responders and the desk, and covers the gateway command filter, role rules, a NORMAL report, anonymity, RESPONDING/RESOLVED, HISTORY, WITHDRAW and topic isolation. `--full` adds an URGENT fire escalation to the city desk and an advisory.
+
+The test writes to the live database. Its IDs (`smoke-res-<tag>` and so on) and purok (`smoke-<tag>`) are unique per run, every description starts with `[SMOKE TEST]`, every report ends RESOLVED or WITHDRAWN, and its subscriptions are removed at the end. Anyone subscribed to the whole barangay still sees the test reports, and `--full` notifies the city desk and the barangay's residents, so tell the group chat before running it on a server people are using. Use `--barangay <id>` to choose a quieter barangay.
+
+**3. Manual browser check** (about 5 minutes). Use two browser windows, one of them private so the sign-ins don't mix, or a phone on the same network if the gateway runs with `--host 0.0.0.0`:
+
+| # | Window | Action | Expected |
+| --- | --- | --- | --- |
+| 1 | A | Open `<URL>` | Home page loads; the bar shows Report and Responder desk |
+| 2 | A | Responder desk, sign in as `tanod-test` (Responder), click the **All of Jaro** preset | Coverage shows `brgy.#`; the feed says "Listening for reports" |
+| 3 | B | Report, sign in as `resident-test`, pick San Roque, `Purok 3`, Noise, type a description, **Send report** | Toast "Report sent"; the report appears under Your reports as Received |
+| 4 | A | Watch the feed | The report appears with `resident-test` as reporter; the Open count goes up |
+| 5 | A | Type a note, click **Respond** | Badge turns Responding; toast confirms |
+| 6 | B | Watch the report | The tracker moves to Responding and shows the note |
+| 7 | A | Click **Resolve** | The card dims; the Resolved count goes up |
+| 8 | B | Watch the report | Resolved; the hide (✕) button appears |
+| 9 | B | Send an anonymous **Fire** report | Urgent warning before sending; "Escalated to city" badge after |
+| 10 | A | Watch the feed | The fire report is at the top, marked Urgent, reporter "Anonymous" |
+| 11 | B | Send another report, then **Withdraw report** and confirm | It shows "Withdrawn by the resident" in both windows |
+| 12 | A | Post an advisory to San Roque; in B, click **Follow San Roque** first | B lists the advisory under Barangay advisories |
+| 13 | B | Reload the page | Still signed in; earlier reports are restored |
+| 14 | — | Stop the broker (Ctrl+C), wait a moment | Both windows return to sign-in with "Broker closed the connection" |
+| 15 | — | Start the broker again and sign in with the same IDs | Reports and subscriptions are back |
+
+Resolve or withdraw anything you created by hand. If a step fails, note the step number and open **Protocol log** at the bottom of the page: it shows every line sent and received.
 
 ## Demo Script
 
@@ -88,7 +172,7 @@ Delete `sumbong.db*` first for a clean start. Each step names the terminal to ty
 | Kelly | Clients | resident.py, responder.py, status.py, client.py |
 | Arvin | Web app (extra) | frontend/ (React interface and gateway.py) |
 
-Tests are in `tests/`, one file per module, plus `test_clients.py` and `test_reliability.py` for the fault tests.
+Tests are in `tests/`, one file per module, plus `test_clients.py` and `test_reliability.py` for the fault tests, `test_gateway.py` for the web gateway and `live_smoke.py` for the live-server check. The web app's tests sit next to the code as `frontend/src/**/*.test.js(x)`, with a simulated gateway in `frontend/src/test/fakeGateway.js`.
 
 ## Contribution Rules
 
@@ -104,6 +188,6 @@ Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). Distributed Syst
 
 Barangays of Jaro district: Jaro, Iloilo City. (n.d.). In *Wikipedia*. https://en.wikipedia.org/wiki/Jaro,_Iloilo_City
 
-Web app libraries (frontend only): React, Vite and Lucide icons, MIT/ISC licenses, installed with npm.
+Web app libraries (frontend only): React, Vite and Lucide icons, MIT/ISC licenses, installed with npm. Web app test tools (development only): Vitest, jsdom and Testing Library, MIT licenses.
 
 Borrowed code: none.

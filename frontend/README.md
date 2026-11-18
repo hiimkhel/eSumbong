@@ -25,9 +25,11 @@ connection to the broker and sends the same one-line commands the CLI clients se
 | `src/components/` | App bar, sign-in, toast, protocol log, and `ui.jsx` (logo, status tracker, badges, empty states) |
 | `src/lib/format.js` | Category labels and icons, place names from topics, times |
 | `src/styles.css` | eSumbong design system: brand tokens, type, components (light and dark) |
+| `public/logo.svg` | Rise logo, also the favicon |
+| `src/**/*.test.js(x)` | Vitest tests, next to the code they test |
+| `src/test/` | Test setup and `fakeGateway.js`, a simulated gateway for page tests |
 
 Icons come from [Lucide](https://lucide.dev) (`lucide-react`).
-| `public/logo.svg` | Rise logo, also the favicon |
 
 ## Requirements
 
@@ -63,3 +65,28 @@ npm run dev
 
 Open http://127.0.0.1:5173. Edits reload instantly, and `/api` requests are forwarded
 to the gateway on port 8080. Run `npm run build` again before testing through port 8080.
+
+## Scripts
+
+| Command | What it does |
+| --- | --- |
+| `npm install` | install dependencies (once, and after `package.json` changes) |
+| `npm run dev` | development server on :5173 with hot reload |
+| `npm run build` | production build into `dist/`, served by `gateway.py` |
+| `npm run preview` | serve `dist/` on :4173 without the gateway (UI only) |
+| `npm test` | run all web app tests once |
+| `npm run test:watch` | rerun tests on every save |
+
+## Testing
+
+`npm test` needs no broker or gateway: `src/test/fakeGateway.js` replaces `fetch` and
+`EventSource`, records each line the page sends, and lets a test push broker lines
+(`MSG`, `UPDATED`, `ERR`, ...) into the event stream. The tests cover:
+
+- `lib/`: line parsing, topic matching (same cases as `tests/test_topics.py`), storage helpers, and `Connection` (connect, ACK every MSG, drop duplicate message IDs, lost connection)
+- `components/` and `hooks/`: every component, `useConnection` and `useDismissed`
+- `pages/`: full Resident flows (validate, report, anonymous, urgent, follow status, withdraw, hide, history, advisories) and Responder/desk flows (subscribe, presets, ERR rollback, feed order and filters, respond, resolve, escalation rules, advisories)
+- `App.test.jsx`: hash routing and page titles
+
+The gateway itself is tested in Python (`tests/test_gateway.py`). For the deployed
+system, see "Testing procedure on the live server" in the main [README](../README.md#testing).
