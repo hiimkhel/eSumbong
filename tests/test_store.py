@@ -105,10 +105,26 @@ class EscalationTest(StoreTestCase):
         self.assertEqual(store.get_report("r1")["escalated"], 1)
         self.assertEqual(store.reports_to_escalate(0, now=99999.0), [])
 
-    def test_mark_escalated_skips_answered_report(self):
+    def test_mark_escalated_skips_resolved_report(self):
+        _report()
+        store.update_report_status("r1", "RESOLVED", "tanod1")
+        self.assertFalse(store.mark_escalated("r1"))
+
+    def test_mark_escalated_allows_unresolved_report(self):
         _report()
         store.update_report_status("r1", "RESPONDING", "tanod1")
-        self.assertFalse(store.mark_escalated("r1"))
+        self.assertTrue(store.mark_escalated("r1"))
+
+    def test_reports_unresolved(self):
+        _report("slow", created_at=1000.0)
+        _report("recent", created_at=1100.0)
+        _report("waiting", created_at=900.0)   # never answered: not this query's job
+        _report("done", created_at=900.0)
+        for rid in ("slow", "recent", "done"):
+            store.update_report_status(rid, "RESPONDING", "tanod1")
+        store.update_report_status("done", "RESOLVED", "tanod1")
+        due = [r["report_id"] for r in store.reports_unresolved(120, now=1130.0)]
+        self.assertEqual(due, ["slow"])
 
     def test_mark_escalated_race(self):
         _report()

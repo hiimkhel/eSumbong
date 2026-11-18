@@ -26,7 +26,7 @@ def subscribe(test, client_id, pattern="brgy.#"):
 
 def report(test, text="help", client_id="juan"):
     res = test.client(client_id, "resident")
-    report_id = res.ask(f"REPORT brgy.jaro.p1.fire N {text}").split()[1]
+    report_id = res.ask(f"REPORT brgy.san-roque.p1.fire N {text}").split()[1]
     res.sync()  # fan-out has finished once PING is answered
     return report_id
 
@@ -134,12 +134,12 @@ class RestartTest(unittest.TestCase):
             _, port = b1.start()
             tanod = Client(port)
             tanod.send("HELLO tanod1 responder")
-            tanod.send("SUB brgy.jaro.#")
+            tanod.send("SUB brgy.san-roque.#")
             tanod.sync()
             tanod.close()
             res = Client(port)
             res.send("HELLO juan resident")
-            report_id = res.ask("REPORT brgy.jaro.p1.fire N smoke").split()[1]
+            report_id = res.ask("REPORT brgy.san-roque.p1.fire N smoke").split()[1]
             res.sync()
             res.close()
             b1.stop()

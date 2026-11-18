@@ -1,6 +1,6 @@
 # Sumbong Protocol
 
-- Every message is one line of UTF-8 plain text over TCP, ending with "\n". Commands are uppercase. Fields are separated by single spaces; the free-text field is always last and is read using a maxsplit (REPORT and STATUS: 4 parts; MSG: 5 parts).
+- Every message is one line of UTF-8 plain text over TCP, ending with "\n". Commands are uppercase. Fields are separated by single spaces; the free-text field is always last and is read using a maxsplit (REPORT, STATUS and HIST: 4 parts; MSG: 5 parts).
 - The MSG body is a single-line JSON object with fields: report_id, topic, category, priority, description, status, escalated, and reporter (omitted when the report is anonymous).
 
 | Direction | Command | Meaning |
@@ -11,17 +11,33 @@
 | Broker → Resident | REPORTED <report_id> | Report stored; resident auto-subscribed to report.<report_id>.status |
 | Broker → Subscriber | MSG <msg_id> <topic> <priority> <body> | Deliver one report, status update, or escalation |
 | Subscriber → Broker | ACK <msg_id> | Mark message delivered |
-| Responder → Broker | STATUS <report_id> <RESPONDING/RESOLVED> <note> | Publish a status update |
+| Responder → Broker | STATUS <report_id> <RESPONDING/RESOLVED> <note> | Publish a status update (responder or desk; note may be empty) |
+| Resident → Broker | WITHDRAW <report_id> <reason> | Take back one's own report while it is still RECEIVED (reason optional); it becomes WITHDRAWN and is published like a status update, without updated_by |
+| Broker → Responder | UPDATED <report_id> <status> | Status saved; the update is published as MSG on report.<report_id>.status and on the incident topic, with note and updated_by added to the body |
+| Client → Broker | SUBS | Ask for this client's saved subscriptions |
+| Broker → Client | SUBS <pattern> <pattern> ... | Reply to SUBS; just "SUBS" when there are none |
+| Client → Broker | HISTORY | Ask for the current state of reports this client's subscriptions cover (latest 50) |
+| Broker → Client | HIST <topic> <priority> <body> | One report, oldest first; same body as MSG plus created_at (and anonymous for the reporter, note if any). Not ACKed |
+| Broker → Client | HISTEND <count> | End of the HISTORY reply |
 | Either way | PING / PONG | Heartbeat |
 | Broker → Client | ERR <reason> | Malformed command or unknown report |
 
 ## Topics
 
+- Scope: Jaro district, Iloilo City. <barangay> is one of the 42 levels in config.BARANGAYS (e.g. san-roque, mh-del-pilar); REPORT from anywhere else gets ERR. <purok> may be a purok or a landmark (e.g. purok-3, near-jaro-plaza).
+- Who may SUB (escalation.py): the desk only city.iloilo.escalated.<barangay|*|#>; responders only brgy.…; residents only brgy.<barangay>.advisory. Residents get report.<report_id>.status added by the broker when they REPORT and cannot SUB to it. Saved subscriptions a role may not hold are dropped on HELLO.
 - Incident topics: brgy.<barangay>.<purok>.<category>
 - Advisory topic: brgy.<barangay>.advisory
 - Status topic: report.<report_id>.status
 - Escalation topic: city.iloilo.escalated.<barangay>
 - * matches exactly one level; # matches zero or more levels and must be the last level.
 - Fire, fight, and flood are URGENT; all other categories are NORMAL.
+
+## Escalation (escalation.py)
+
+- URGENT reports are escalated to the city desk the moment they are filed; the barangay's subscribers still receive them (with escalated true).
+- Any report still RECEIVED after config.ESCALATE_SECONDS, or still RESPONDING config.UNRESOLVED_ESCALATE_SECONDS after it was filed, is escalated. Each report is escalated at most once, and never once RESOLVED.
+- An escalation is published as MSG on city.iloilo.escalated.<barangay>, report.<report_id>.status and the incident topic, with escalated true and the reason in note. (An URGENT report filed just now goes only to the escalation topic as an extra message; its first MSG on the incident topic already says escalated.)
+- Once escalated, a responder may still send RESPONDING, but only the desk may send RESOLVED.
 
 Any change to this protocol requires a pull request reviewed by the whole team.

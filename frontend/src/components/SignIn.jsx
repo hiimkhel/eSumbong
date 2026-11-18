@@ -1,16 +1,23 @@
 import { useState } from "react";
 import { AlertCircle, ArrowRight, User } from "lucide-react";
-import { LogoMark } from "./ui.jsx";
+import { FieldError, LogoMark } from "./ui.jsx";
 
 // Shown instead of the page until the browser has a broker session.
 // roles: optional [{ value, label, hint, icon }] to pick from. onConnect(id, role) may throw.
-export default function SignIn({ title, lead, foot, placeholder, roles, defaultRole, reason, onConnect }) {
-  const [id, setId] = useState("");
+export default function SignIn({ title, lead, foot, placeholder, roles, defaultId, defaultRole, reason, onConnect }) {
+  const [id, setId] = useState(defaultId || "");
   const [role, setRole] = useState(defaultRole || roles?.[0]?.value);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   async function submit(e) {
     e.preventDefault();
+    const value = id.trim();
+    const problem = !value ? "Enter an ID so you can follow your reports."
+      : /\s/.test(value) ? "Use one word with no spaces, e.g. juan-dc."
+      : "";
+    setError(problem);
+    if (problem) return e.currentTarget.querySelector("input")?.focus();
     setBusy(true);
     try {
       await onConnect(id.trim(), role);
@@ -25,7 +32,7 @@ export default function SignIn({ title, lead, foot, placeholder, roles, defaultR
         <span className="signin-mark"><LogoMark size={40} /></span>
         <h1 id="signin-title">{title}</h1>
         <p>{lead}</p>
-        <form onSubmit={submit}>
+        <form onSubmit={submit} noValidate>
           {reason && (
             <div className="signin-alert" role="alert">
               <AlertCircle size={16} /> {reason}. Sign in again to reconnect.
@@ -51,9 +58,12 @@ export default function SignIn({ title, lead, foot, placeholder, roles, defaultR
             <span className="input-icon">
               <User size={17} />
               <input className="input" required maxLength={64} pattern="\S+" autoFocus
-                placeholder={placeholder} value={id} onChange={(e) => setId(e.target.value)} />
+                placeholder={placeholder} value={id} aria-invalid={error ? true : undefined}
+                onChange={(e) => { setId(e.target.value); setError(""); }} />
             </span>
-            <span className="field-hint">One word, no spaces. Use the same ID to see your reports again.</span>
+            {error
+              ? <FieldError>{error}</FieldError>
+              : <span className="field-hint">One word, no spaces. Use the same ID to see your reports again.</span>}
           </label>
           <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>
             {busy ? "Connecting…" : "Continue"} {!busy && <ArrowRight size={18} />}

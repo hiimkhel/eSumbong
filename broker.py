@@ -17,7 +17,7 @@ Delivery is at-least-once:
     first, as soon as it sends HELLO (store-and-forward catch-up).
 Because state lives in sumbong.db, all of this survives a broker restart.
 
-STATUS arrives in Pass 4.
+STATUS rules (who may update, which moves are allowed) are in escalation.py.
 """
 
 import argparse
@@ -30,11 +30,13 @@ import threading
 import uuid
 
 import config
+import escalation
 import store
 import topic_matcher
 
 MAX_LINE_BYTES = 4096
 MAX_CLIENT_ID = 64
+HISTORY_LIMIT = 50  # most recent reports sent in reply to HISTORY
 
 log = logging.getLogger("broker")
 
@@ -88,12 +90,14 @@ class Session:
 class Broker:
 
     def __init__(self, host=config.HOST, port=config.PORT, db_path=None,
-                 retry_seconds=config.RETRY_SECONDS, retry_check_seconds=1.0):
+                 retry_seconds=config.RETRY_SECONDS, retry_check_seconds=1.0,
+                 escalation_check_seconds=config.ESCALATION_CHECK_SECONDS):
         self.host = host
         self.port = port
         self.db_path = db_path
         self.retry_seconds = retry_seconds
         self.retry_check_seconds = retry_check_seconds
+        self.escalation_check_seconds = escalation_check_seconds
         self._online = {}               # client_id -> Session
         self._online_lock = threading.Lock()
         self._stop = threading.Event()
@@ -106,8 +110,11 @@ class Broker:
             "REPORT": self.cmd_report,
             "ACK": self.cmd_ack,
             "STATUS": self.cmd_status,
+            "WITHDRAW": self.cmd_withdraw,
             "PING": self.cmd_ping,
             "PONG": self.cmd_pong,
+            "SUBS": self.cmd_subs,
+            "HISTORY": self.cmd_history,
         }
 
     # ------------------------------------------------------------ lifecycle
@@ -130,6 +137,8 @@ class Broker:
         self._threads.append(t)
         self._threads.append(store.start_retry_thread(
             self._resend, self._stop, self.retry_seconds, self.retry_check_seconds))
+        self._threads.append(escalation.start_escalation_thread(
+            self.publish_escalation, self._stop, self.escalation_check_seconds))
         log.info("listening on %s:%d (db: %s, retry every %ss)", self.host, self.port,
                  self.db_path or config.DB_PATH, self.retry_seconds)
         return self.host, self.port
@@ -245,7 +254,18 @@ class Broker:
             log.info("%s reconnected; closing old connection", client_id)
             old.close()
         log.info("%s online as %s", client_id, role)
+        self._drop_disallowed_subscriptions(session)
         self.on_hello(session)
+
+    @staticmethod
+    def _drop_disallowed_subscriptions(session):
+        """A client_id may have saved subscriptions from an older version or
+        another role; keep only what this role may hold (escalation.py)."""
+        for pattern in store.subscriptions_for(session.client_id):
+            if not escalation.may_keep(session.role, pattern):
+                store.remove_subscription(session.client_id, pattern)
+                log.info("%s: dropped subscription %s (not allowed for %s)",
+                         session.client_id, pattern, session.role)
 
     def on_hello(self, session):
         """Catch-up: send every message this client has not ACKed yet, oldest
@@ -261,6 +281,9 @@ class Broker:
 
     def cmd_sub(self, session, line):
         pattern = self._pattern_arg(line, "SUB")
+        error = escalation.subscription_error(session.role, pattern)
+        if error:
+            raise CommandError(error)
         if store.add_subscription(session.client_id, pattern):
             log.info("%s subscribed to %s", session.client_id, pattern)
 
@@ -292,6 +315,9 @@ class Broker:
             raise CommandError(
                 "topic must be brgy.<barangay>.<purok>.<category> with category one of "
                 + "/".join(config.CATEGORIES))
+        if parsed["barangay"] not in config.BARANGAYS:
+            raise CommandError(f"{parsed['barangay'][:40]} is not a barangay of "
+                               f"{config.DISTRICT_NAME}, {config.CITY_NAME}")
         anon = anon.upper()
         if anon not in ("Y", "N"):
             raise CommandError("anon must be Y or N")
@@ -306,7 +332,13 @@ class Broker:
         log.info("report %s from %s on %s (%s%s)", report_id, session.client_id, topic,
                  priority, ", anonymous" if anon == "Y" else "")
 
-        self.publish(topic, priority, store.get_report(report_id))
+        # Fire, fight and flood go to the city desk at once. Escalating before
+        # publishing means the tanods' copy already says escalated.
+        report, reason = escalation.escalate_if_urgent(report_id)
+        self.publish(topic, priority, report or store.get_report(report_id))
+        if report is not None:
+            self.publish(topic_matcher.escalation_topic(report["barangay"]), priority,
+                         report, note=reason)
 
     @staticmethod
     def _save_new_report(topic, barangay, priority, description, reporter_id, anonymous):
@@ -329,7 +361,89 @@ class Broker:
         store.mark_delivered(parts[1], session.client_id)
 
     def cmd_status(self, session, line):
-        raise CommandError("STATUS is not available yet")  # Pass 4
+        """STATUS <report_id> <RESPONDING/RESOLVED> <note>. The rules live in
+        escalation.py; the broker answers UPDATED and publishes the change."""
+        parts = line.split(" ", 3)
+        if len(parts) < 3 or not parts[1]:
+            raise CommandError("usage: STATUS <report_id> <RESPONDING/RESOLVED> <note>")
+        if session.role not in ("responder", "desk"):
+            raise CommandError("only responders and the desk can send STATUS")
+        report_id, status = parts[1], parts[2].upper()
+        note = escalation.clean_note(parts[3] if len(parts) == 4 else "")
+        try:
+            report = escalation.apply_status(report_id, status, session.client_id,
+                                             session.role, note)
+        except escalation.StatusError as exc:
+            raise CommandError(str(exc)) from None
+        session.send(f"UPDATED {report_id} {status}")
+        log.info("report %s is now %s (by %s)", report_id, status, session.client_id)
+        for topic in escalation.status_topics(report):
+            self.publish(topic, report["priority"], report,
+                         note=note, updated_by=session.client_id)
+
+    def cmd_withdraw(self, session, line):
+        """WITHDRAW <report_id> [<reason>]: the resident who filed a report
+        takes it back while nobody has responded (rules in escalation.py)."""
+        parts = line.split(" ", 2)
+        if len(parts) < 2 or not parts[1]:
+            raise CommandError("usage: WITHDRAW <report_id> <reason>")
+        if session.role != "resident":
+            raise CommandError("only the resident who filed a report can WITHDRAW it")
+        report_id = parts[1]
+        note = escalation.clean_note(parts[2] if len(parts) == 3 else "") or "Withdrawn by the resident"
+        try:
+            report = escalation.withdraw(report_id, session.client_id, note)
+        except escalation.StatusError as exc:
+            raise CommandError(str(exc)) from None
+        session.send(f"UPDATED {report_id} WITHDRAWN")
+        log.info("report %s withdrawn by its reporter", report_id)
+        # No updated_by: for an anonymous report it would name the reporter.
+        for topic in escalation.status_topics(report):
+            self.publish(topic, report["priority"], report, note=note)
+
+    def cmd_subs(self, session, line):
+        """SUBS -> SUBS <pattern> <pattern> ... (just "SUBS" when there are none).
+        Lets a client that reconnects see the subscriptions the broker kept."""
+        if line != "SUBS":
+            raise CommandError("usage: SUBS")
+        session.send(" ".join(["SUBS", *store.subscriptions_for(session.client_id)]))
+
+    def cmd_history(self, session, line):
+        """HISTORY -> one HIST <topic> <priority> <body> per report, oldest
+        first, then HISTEND <count>. Covers the latest HISTORY_LIMIT reports
+        the client's subscriptions reach: incident topics, the report's status
+        topic (so residents get their own reports), and the escalation topic
+        once a report is escalated. Reports resolved more than
+        config.RESOLVED_HIDE_SECONDS ago are left out. HIST is not ACKed; it is a snapshot of each
+        report's current state, not a delivery."""
+        if line != "HISTORY":
+            raise CommandError("usage: HISTORY")
+        patterns = store.subscriptions_for(session.client_id)
+        reports = []
+        for report in store.list_reports():
+            if not self._covers(patterns, report):
+                continue
+            history = store.status_history(report["report_id"])
+            if escalation.resolved_long_ago(report, history):
+                continue  # closed a while ago: kept in the database, not on screens
+            reports.append((report, history))
+        reports = reports[-HISTORY_LIMIT:]
+        for report, history in reports:
+            extra = {"created_at": report["created_at"]}
+            if report["reporter_id"] == session.client_id:
+                extra["anonymous"] = bool(report["anonymous"])  # only the reporter learns this
+            if history and history[-1]["note"]:
+                extra["note"] = history[-1]["note"]
+            body = self.message_body(report, **extra)
+            session.send(f"HIST {report['topic']} {report['priority']} {body}")
+        session.send(f"HISTEND {len(reports)}")
+
+    @staticmethod
+    def _covers(patterns, report):
+        topics = [report["topic"], topic_matcher.status_topic(report["report_id"])]
+        if report["escalated"]:
+            topics.append(topic_matcher.escalation_topic(report["barangay"]))
+        return any(topic_matcher.any_match(patterns, t) for t in topics)
 
     def cmd_ping(self, session, line):
         session.send("PONG")
@@ -374,6 +488,12 @@ class Broker:
         log.info("published %s on %s to %d/%d subscribers online",
                  msg_id, topic, sent, len(recipients))
         return msg_id
+
+    def publish_escalation(self, report, reason):
+        """Escalation-thread callback: tell the city desk, the resident and
+        the barangay's responders that a report went to the city."""
+        for topic in escalation.escalation_topics(report):
+            self.publish(topic, report["priority"], report, note=reason)
 
     @staticmethod
     def msg_line(row):
