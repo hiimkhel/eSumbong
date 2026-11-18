@@ -197,7 +197,55 @@ describe("SignIn", () => {
     render(<SignIn title="Desk" roles={roles} defaultId="  tanod-a " onConnect={onConnect} />);
     await userEvent.click(screen.getByRole("radio", { name: /city desk/i }));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
-    expect(onConnect).toHaveBeenCalledWith("tanod-a", "desk");
+    expect(onConnect).toHaveBeenCalledWith("tanod-a", "desk", undefined); // these roles need no secret
+  });
+
+  const secured = [
+    { ...roles[0], secretLabel: "PIN" },
+    { ...roles[1], secretLabel: "Desk password", fixedId: "city" },
+  ];
+
+  it("asks responders for an ID and PIN and passes the PIN on", async () => {
+    const onConnect = vi.fn(async () => {});
+    render(<SignIn title="Desk" roles={secured} onConnect={onConnect} />);
+    await userEvent.type(screen.getByRole("textbox"), "tanod-a");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter your PIN.");
+    await userEvent.type(screen.getByLabelText(/^PIN/), "12 34");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent("has no spaces");
+    await userEvent.clear(screen.getByLabelText(/^PIN/));
+    await userEvent.type(screen.getByLabelText(/^PIN/), "1234");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(onConnect).toHaveBeenCalledWith("tanod-a", "responder", "1234");
+    expect(screen.getByLabelText(/^PIN/)).toHaveAttribute("type", "password");
+  });
+
+  it("asks the desk for its password only and uses the fixed ID", async () => {
+    const onConnect = vi.fn(async () => {});
+    render(<SignIn title="Desk" roles={secured} defaultRole="desk" onConnect={onConnect} />);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    await userEvent.type(screen.getByLabelText(/Desk password/), "city-pass-1");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(onConnect).toHaveBeenCalledWith("city", "desk", "city-pass-1");
+  });
+
+  it("shows a refused sign-in and clears the secret", async () => {
+    const onConnect = vi.fn(async () => { throw new Error("sign-in failed: wrong ID, PIN or password"); });
+    render(<SignIn title="Desk" roles={secured} defaultId="tanod-a" onConnect={onConnect} />);
+    await userEvent.type(screen.getByLabelText(/^PIN/), "0000");
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't sign in: sign-in failed");
+    expect(screen.getByLabelText(/^PIN/)).toHaveValue("");
+    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+  });
+
+  it("switching role clears a typed secret", async () => {
+    render(<SignIn title="Desk" roles={secured} onConnect={() => {}} />);
+    await userEvent.type(screen.getByLabelText(/^PIN/), "1234");
+    await userEvent.click(screen.getByRole("radio", { name: /city desk/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /responder/i }));
+    expect(screen.getByLabelText(/^PIN/)).toHaveValue("");
   });
 
   it("shows why the last session ended", () => {

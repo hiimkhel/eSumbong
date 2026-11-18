@@ -56,6 +56,11 @@ export function parseLine(line) {
     const parts = splitMax(line, 3);
     return { command, reportId: parts[1], status: parts[2], raw: line };
   }
+  if (command === "ME") {
+    // Reply to WHOAMI. barangay is null for accounts that cover all of Jaro.
+    const [, clientId, role, barangay] = line.split(" ");
+    return { command, clientId, role, barangay: barangay && barangay !== "-" ? barangay : null, raw: line };
+  }
   if (command === "ERR") return { command, reason: splitMax(line, 2)[1] || "", raw: line };
   return { command, raw: line };
 }
@@ -116,9 +121,12 @@ export class Connection {
 
   get connected() { return this.session !== null; }
 
-  async connect(clientId, role) {
+  // secret: a responder's PIN or the desk password. Sent once, never kept.
+  async connect(clientId, role, secret) {
     await this.disconnect();
-    const { session } = await postJSON("/api/connect", { client_id: clientId, role });
+    const body = { client_id: clientId, role };
+    if (secret) body.secret = secret;
+    const { session } = await postJSON("/api/connect", body);
     this.session = session;
     this.events = new EventSource(`/api/events?session=${encodeURIComponent(session)}`);
     this.events.onmessage = (e) => this._handle(e.data);

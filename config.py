@@ -13,6 +13,14 @@ CATEGORIES = ("noise", "drinking", "fight", "suspicious", "animals", "fire", "fl
 URGENT_CATEGORIES = ("fire", "fight", "flood")
 ROLES = ("resident", "responder", "desk")
 
+# Sign-in (auth.py). Residents use an ID only. Responders sign in with an ID and
+# a PIN, the single city desk with a password only; accounts are made with users.py.
+DESK_ID = "city"
+MIN_PIN_LENGTH = 4
+MIN_DESK_PASSWORD_LENGTH = 8
+MAX_FAILED_LOGINS = 5   # refused sign-ins for one ID before it is locked
+LOCKOUT_SECONDS = 300   # how long the lock lasts
+
 # Scope: the 42 barangays of Jaro district, Iloilo City. Topic level -> name.
 # Source: https://en.wikipedia.org/wiki/Jaro,_Iloilo_City
 CITY = "iloilo"
@@ -62,6 +70,21 @@ BARANGAYS = {
     "taytay-zone-ii": "Taytay Zone II",
     "ungka": "Ungka",
 }
-REPORT_STATUSES = ("RECEIVED", "RESPONDING", "RESOLVED", "WITHDRAWN")
+# Short code per barangay for responder IDs made by users.py: SR-T01 is San Roque's
+# first tanod, SR-CAPT its captain. Every code must be unique (tests/test_auth.py checks).
+BARANGAY_CODES = {
+    "arguelles": "ARG", "balabago": "BLB", "balantang": "BLT", "benedicto": "BEN",
+    "bito-on": "BIT", "buhang": "BUH", "buntatala": "BUN", "calubihan": "CAL",
+    "camalig": "CAM", "claudio-castilla-el-98": "CCE", "cuartero": "CUA", "cubay": "CUB",
+    "democracia": "DEM", "desamparados": "DES", "dungon-a": "DGA", "dungon-b": "DGB",
+    "fajardo": "FAJ", "javellana": "JAV", "lanit": "LAN", "libertad-santa-isabel": "LSI",
+    "lopez-jaena": "LJ", "luna": "LUN", "mh-del-pilar": "MHP", "mv-hechanova": "MVH",
+    "ma-cristina": "MAC", "montinola": "MON", "our-lady-of-fatima": "OLF",
+    "our-lady-of-lourdes": "OLL", "quintin-salas": "QS", "sambag": "SAM",
+    "san-isidro": "SI", "san-jose": "SJ", "san-pedro": "SP", "san-roque": "SR",
+    "san-vicente": "SV", "seminario": "SEM", "simon-ledesma": "SL", "tabuc-suba": "TS",
+    "tacas": "TAC", "tagbac": "TAG", "taytay-zone-ii": "TZ2", "ungka": "UNG",
+}
+REPORT_STATUSES =("RECEIVED", "RESPONDING", "RESOLVED", "WITHDRAWN")
 CLOSED_STATUSES = ("RESOLVED", "WITHDRAWN")  # nothing more happens to these
 DELIVERY_STATUSES = ("PENDING", "DELIVERED")

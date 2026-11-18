@@ -61,6 +61,18 @@ PRIMARY KEY (msg_id, client_id)
 | note | TEXT | |
 | time | REAL | |
 
+## users
+
+Responder and city desk accounts (auth.py, managed with users.py). Residents have none.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| client_id | TEXT | primary key; the desk is config.DESK_ID (`city`) |
+| role | TEXT | responder/desk |
+| barangay | TEXT | null: all of Jaro; otherwise the one barangay this responder may cover |
+| secret_hash | TEXT | `pbkdf2_sha256$<iterations>$<salt>$<hash>`; the PIN or password itself is never stored |
+| created_at | REAL | |
+
 ## Recommended indexes
 
 - `deliveries(client_id, status)`

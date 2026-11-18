@@ -39,7 +39,8 @@ class Events:
 class ClientTest(unittest.TestCase):
 
     def setUp(self):
-        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", retry_seconds=0.5, retry_check_seconds=0.1)
+        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", retry_seconds=0.5, retry_check_seconds=0.1,
+                                    require_auth=False)  # sign-in: tests/test_auth.py
         _, self.port = self.broker.start()
         self.clients = []
 
@@ -72,12 +73,20 @@ class ClientTest(unittest.TestCase):
         self.assertIn("is now RESPONDING by tanod-a - on the way", client.describe(msg))
 
     def test_lost_ack_shows_retry_and_duplicate_ignored(self):
-        tanod, events = self.connect("tanod-b", "responder", drop_acks=1)
+        tanod, events = self.connect("tanod-b", "responder")
+        # Lose the first ACK on the way to the broker (a network fault).
+        real_send, lost = tanod.send, []
+        def lossy_send(line):
+            if line.startswith("ACK ") and not lost:
+                lost.append(line)
+                return
+            real_send(line)
+        tanod.send = lossy_send
         tanod.send("SUB brgy.san-roque.#")
         juan, _ = self.connect("juan", "resident")
         juan.send("REPORT brgy.san-roque.purok-3.fire N smoke")
-        self.assertIn("not ACKing", events.next("NOTE")[1])  # said before the message is shown
         _, msg = events.next("MSG")
+        self.assertEqual(lost, [f"ACK {msg['msg_id']}"])
         _, dup = events.next("DUPLICATE")  # the broker's resend, same msg_id
         self.assertEqual(dup, msg["msg_id"])
         tanod.send("PING")

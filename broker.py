@@ -18,6 +18,7 @@ Delivery is at-least-once:
 Because state lives in sumbong.db, all of this survives a broker restart.
 
 STATUS rules (who may update, which moves are allowed) are in escalation.py.
+Sign-in (PINs for responders, the desk password) is checked in auth.py.
 """
 
 import argparse
@@ -27,8 +28,10 @@ import os
 import socket
 import sqlite3
 import threading
+import time
 import uuid
 
+import auth
 import config
 import escalation
 import store
@@ -37,6 +40,8 @@ import topic_matcher
 MAX_LINE_BYTES = 4096
 MAX_CLIENT_ID = 64
 HISTORY_LIMIT = 50  # most recent reports sent in reply to HISTORY
+FAILED_LOGIN_DELAY = 1.0  # seconds before ending a refused sign-in (slows PIN guessing)
+REFUSED_LINGER_SECONDS = 5  # how long a refused connection may stay open before it is cut
 
 log = logging.getLogger("broker")
 
@@ -48,13 +53,16 @@ class CommandError(Exception):
 # ---------------------------------------------------------------- sessions
 
 class Session:
-    """One TCP connection. client_id and role are set by HELLO."""
+    """One TCP connection. client_id, role and barangay are set by HELLO;
+    barangay is the one a responder account is tied to (None: all of Jaro)."""
 
     def __init__(self, sock, addr):
         self.sock = sock
         self.addr = addr
         self.client_id = None
         self.role = None
+        self.barangay = None
+        self.refused = False  # sign-in refused: lines are ignored until the client hangs up
         self._send_lock = threading.Lock()
         self.closed = threading.Event()
 
@@ -74,6 +82,19 @@ class Session:
             self.close()
             return False
 
+    def refuse(self):
+        """End a refused sign-in gracefully: stop sending (the ERR already sent
+        arrives, followed by end-of-stream) but keep reading, and ignoring,
+        until the client hangs up. Closing at once with the client's next
+        line still unread would reset the connection, and the client could
+        lose the ERR. Called from this session's own reader thread."""
+        self.refused = True
+        try:
+            self.sock.settimeout(REFUSED_LINGER_SECONDS)
+            self.sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            self.close()
+
     def close(self):
         if self.closed.is_set():
             return
@@ -91,18 +112,24 @@ class Broker:
 
     def __init__(self, host=config.HOST, port=config.PORT, db_path=None,
                  retry_seconds=config.RETRY_SECONDS, retry_check_seconds=1.0,
-                 escalation_check_seconds=config.ESCALATION_CHECK_SECONDS):
+                 escalation_check_seconds=config.ESCALATION_CHECK_SECONDS,
+                 require_auth=True):
         self.host = host
         self.port = port
         self.db_path = db_path
         self.retry_seconds = retry_seconds
         self.retry_check_seconds = retry_check_seconds
         self.escalation_check_seconds = escalation_check_seconds
+        # Off only in tests that are not about sign-in; the real broker always checks.
+        self.require_auth = require_auth
+        self.failed_login_delay = FAILED_LOGIN_DELAY
         self._online = {}               # client_id -> Session
         self._online_lock = threading.Lock()
         self._stop = threading.Event()
         self._server = None
         self._threads = []
+        self._client_threads = set()    # live per-client threads, joined on stop()
+        self._client_threads_lock = threading.Lock()
         self.handlers = {
             "HELLO": self.cmd_hello,
             "SUB": self.cmd_sub,
@@ -116,6 +143,7 @@ class Broker:
             "PONG": self.cmd_pong,
             "SUBS": self.cmd_subs,
             "HISTORY": self.cmd_history,
+            "WHOAMI": self.cmd_whoami,
         }
 
     # ------------------------------------------------------------ lifecycle
@@ -154,6 +182,12 @@ class Broker:
             s.close()
         for t in self._threads:
             t.join(timeout=2)
+        # Let client threads finish the command they are in (e.g. a fan-out)
+        # before the database closes under them.
+        with self._client_threads_lock:
+            client_threads = list(self._client_threads)
+        for t in client_threads:
+            t.join(timeout=2)
         store.close_db()
         log.info("stopped")
 
@@ -178,8 +212,11 @@ class Broker:
             sock.settimeout(None)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             session = Session(sock, addr)
-            threading.Thread(target=self._client_loop, args=(session,),
-                             name=f"client-{addr[1]}", daemon=True).start()
+            t = threading.Thread(target=self._client_loop, args=(session,),
+                                 name=f"client-{addr[1]}", daemon=True)
+            with self._client_threads_lock:
+                self._client_threads.add(t)
+            t.start()
 
     # ------------------------------------------------------------ per client
 
@@ -204,6 +241,8 @@ class Broker:
             pass  # connection reset: client crashed or network dropped
         finally:
             self._drop(session)
+            with self._client_threads_lock:
+                self._client_threads.discard(threading.current_thread())
 
     def _drop(self, session):
         session.close()
@@ -218,13 +257,15 @@ class Broker:
 
     def handle_line(self, session, line):
         log.debug("<- %s: %s", session.name, line)
+        if session.refused:
+            return  # sign-in was refused; waiting for the client to hang up
         command = line.split(" ", 1)[0]
         handler = self.handlers.get(command)
         try:
             if handler is None:
                 raise CommandError(f"unknown command {command[:32]}")
             if session.client_id is None and command not in ("HELLO", "PING", "PONG"):
-                raise CommandError("send HELLO <client_id> <role> first")
+                raise CommandError("send HELLO <client_id> <role> [<pin/password>] first")
             handler(session, line)
         except CommandError as exc:
             session.send(f"ERR {exc}")
@@ -236,17 +277,33 @@ class Broker:
 
     def cmd_hello(self, session, line):
         parts = line.split(" ")
-        if len(parts) != 3 or not parts[1]:
-            raise CommandError("usage: HELLO <client_id> <role>")
-        _, client_id, role = parts
+        if len(parts) not in (3, 4) or not parts[1]:
+            raise CommandError("usage: HELLO <client_id> <role> [<pin/password>]")
+        _, client_id, role = parts[:3]
+        secret = parts[3] if len(parts) == 4 else ""
         if session.client_id is not None:
             raise CommandError("already identified")
         if len(client_id) > MAX_CLIENT_ID or not client_id.isprintable():
             raise CommandError("client_id must be 1-64 printable characters")
         if role not in config.ROLES:
             raise CommandError(f"role must be one of {'/'.join(config.ROLES)}")
+        # Check the PIN before anything else: a refused sign-in must not take
+        # over (and disconnect) the real owner of that ID.
+        user = None
+        if self.require_auth:
+            try:
+                user = auth.check_login(client_id, role, secret)
+            except auth.AuthError as exc:
+                log.warning("refused sign-in as %s (%s) from %s", client_id, role, session.addr[0])
+                time.sleep(self.failed_login_delay)  # before answering, so guessing is slow
+                session.send(f"ERR {exc}")
+                session.refuse()
+                return
+        if user:
+            client_id = user["client_id"]  # the account's spelling (sr-t01 signs in as SR-T01)
         session.client_id = client_id
         session.role = role
+        session.barangay = user["barangay"] if user else None
         with self._online_lock:
             old = self._online.get(client_id)
             self._online[client_id] = session
@@ -263,7 +320,7 @@ class Broker:
         """A client_id may have saved subscriptions from an older version or
         another role; keep only what this role may hold (escalation.py)."""
         for pattern in store.subscriptions_for(session.client_id):
-            if not escalation.may_keep(session.role, pattern):
+            if not escalation.may_keep(session.role, pattern, session.barangay):
                 store.remove_subscription(session.client_id, pattern)
                 log.info("%s: dropped subscription %s (not allowed for %s)",
                          session.client_id, pattern, session.role)
@@ -282,7 +339,7 @@ class Broker:
 
     def cmd_sub(self, session, line):
         pattern = self._pattern_arg(line, "SUB")
-        error = escalation.subscription_error(session.role, pattern)
+        error = escalation.subscription_error(session.role, pattern, session.barangay)
         if error:
             raise CommandError(error)
         if store.add_subscription(session.client_id, pattern):
@@ -373,7 +430,7 @@ class Broker:
         note = escalation.clean_note(parts[3] if len(parts) == 4 else "")
         try:
             report = escalation.apply_status(report_id, status, session.client_id,
-                                             session.role, note)
+                                             session.role, note, session.barangay)
         except escalation.StatusError as exc:
             raise CommandError(str(exc)) from None
         session.send(f"UPDATED {report_id} {status}")
@@ -416,6 +473,9 @@ class Broker:
         if barangay not in config.BARANGAYS:
             raise CommandError(f"{barangay[:40]} is not a barangay of "
                                f"{config.DISTRICT_NAME}, {config.CITY_NAME}")
+        if session.barangay and barangay != session.barangay:
+            raise CommandError(f"your account is for {config.BARANGAYS[session.barangay]}; "
+                               "you can only post advisories there")
         priority = priority.upper()
         if priority not in ("URGENT", "NORMAL"):
             raise CommandError("priority must be URGENT or NORMAL")
@@ -474,6 +534,14 @@ class Broker:
         if report["escalated"]:
             topics.append(topic_matcher.escalation_topic(report["barangay"]))
         return any(topic_matcher.any_match(patterns, t) for t in topics)
+
+    def cmd_whoami(self, session, line):
+        """WHOAMI -> ME <client_id> <role> <barangay>, with "-" when the account
+        covers all of Jaro (or is not a barangay account). Lets a client offer
+        only the coverage its account allows."""
+        if line != "WHOAMI":
+            raise CommandError("usage: WHOAMI")
+        session.send(f"ME {session.client_id} {session.role} {session.barangay or '-'}")
 
     def cmd_ping(self, session, line):
         session.send("PONG")

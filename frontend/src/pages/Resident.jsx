@@ -3,7 +3,6 @@ import { Bell, BellRing, Clock, Database, Eye, EyeOff, Hash, Inbox, MapPin, Mega
 import AppBar from "../components/AppBar.jsx";
 import Combobox from "../components/Combobox.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
-import ProtocolLog from "../components/ProtocolLog.jsx";
 import SignIn from "../components/SignIn.jsx";
 import { useToast } from "../components/Toast.jsx";
 import { CategoryTile, EmptyState, FieldError, HiddenToggle, StatusStepper } from "../components/ui.jsx";
@@ -451,7 +450,6 @@ export default function Resident() {
             </div>
           </div>
 
-          <ProtocolLog entries={conn.log} />
           <ConfirmDialog open={hideAsk !== null} title="Hide this report?" confirmLabel="Hide report"
             icon={EyeOff} confirmIcon={EyeOff}
             onCancel={() => setHideAsk(null)}

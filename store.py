@@ -1,6 +1,7 @@
 """store.py
 Owner: Allanah
-Purpose: SQLite storage for reports, messages, subscriptions, deliveries, and status log; retry thread.
+Purpose: SQLite storage for reports, messages, subscriptions, deliveries, status log
+and responder/desk accounts (users); retry thread.
 
 Schema: docs/DATABASE.md. Only this module runs SQL against sumbong.db.
 
@@ -74,6 +75,14 @@ CREATE TABLE IF NOT EXISTS status_log (
     responder_id TEXT,
     note         TEXT,
     time         REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    client_id   TEXT PRIMARY KEY,
+    role        TEXT NOT NULL CHECK (role IN ('responder', 'desk')),
+    barangay    TEXT,
+    secret_hash TEXT NOT NULL,
+    created_at  REAL NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_client_status ON deliveries (client_id, status);
@@ -252,6 +261,64 @@ def get_message(msg_id):
         row = _db().execute(
             "SELECT * FROM messages WHERE msg_id = ?", (msg_id,)).fetchone()
     return _dict(row)
+
+
+# ---------------------------------------------------------------- users
+
+def save_user(client_id, role, secret_hash, barangay=None, created_at=None):
+    """Create an account, or replace the PIN/password, role and barangay of an
+    existing one (matched without regard to case). secret_hash comes from
+    auth.hash_secret(); plain PINs and passwords are never stored."""
+    existing = get_user(client_id)
+    with _lock, _db() as conn:
+        if existing:
+            conn.execute(
+                "UPDATE users SET role = ?, barangay = ?, secret_hash = ? WHERE client_id = ?",
+                (role, barangay, secret_hash, existing["client_id"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO users (client_id, role, barangay, secret_hash, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (client_id, role, barangay, secret_hash, _now(created_at)),
+            )
+
+
+def get_user(client_id):
+    """The account with this ID, ignoring case (SR-T01 = sr-t01), or None.
+    Its client_id is the spelling it was created with."""
+    with _lock:
+        row = _db().execute("SELECT * FROM users WHERE client_id = ? COLLATE NOCASE",
+                            (client_id,)).fetchone()
+    return _dict(row)
+
+
+def delete_user(client_id):
+    """Remove an account, with its subscriptions and undelivered messages, so
+    the ID can be given to someone else later without their backlog. Delivered
+    messages stay as history. Returns the removed ID's spelling, or None."""
+    user = get_user(client_id)
+    if user is None:
+        return None
+    cid = user["client_id"]
+    with _lock, _db() as conn:
+        conn.execute("DELETE FROM users WHERE client_id = ?", (cid,))
+        conn.execute("DELETE FROM subscriptions WHERE client_id = ?", (cid,))
+        conn.execute("DELETE FROM deliveries WHERE client_id = ? AND status = 'PENDING'", (cid,))
+    return cid
+
+
+def list_users(barangay=None):
+    """Accounts without their hashes, desk first, then by barangay and ID.
+    barangay: only that barangay's responders (and no desk)."""
+    sql = "SELECT client_id, role, barangay, created_at FROM users"
+    args = ()
+    if barangay is not None:
+        sql += " WHERE barangay = ?"
+        args = (barangay,)
+    with _lock:
+        rows = _db().execute(sql + " ORDER BY role = 'responder', barangay, client_id", args).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------- subscriptions

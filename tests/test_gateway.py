@@ -19,9 +19,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "frontend"))
 
+import auth  # noqa: E402
 import broker  # noqa: E402
 import config  # noqa: E402
 import gateway  # noqa: E402
+import store  # noqa: E402
 
 WAIT = 5
 
@@ -72,7 +74,8 @@ class EventStream:
 class GatewayTest(unittest.TestCase):
 
     def setUp(self):
-        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", retry_seconds=0.5, retry_check_seconds=0.1)
+        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", retry_seconds=0.5, retry_check_seconds=0.1,
+                                    require_auth=False)  # sign-in: tests/test_auth.py
         _, self.broker_port = self.broker.start()
 
         # A throwaway web build so static serving can be tested without npm.
@@ -164,6 +167,37 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertIn("cannot reach broker", body["error"])
 
+    def test_sign_in_is_checked_at_connect(self):
+        self.broker.require_auth = True
+        self.broker.failed_login_delay = 0
+        auth.reset_failures()
+        store.save_user("tanod-a", "responder", auth.hash_secret("1234", iterations=1000), "san-roque")
+        store.save_user(config.DESK_ID, "desk", auth.hash_secret("city-pass-1", iterations=1000))
+
+        def connect(**body):
+            return self.request("POST", "/api/connect", body)[:2]
+
+        status, body = connect(client_id="tanod-a", role="responder", secret="1234")
+        self.assertEqual(status, 200, body)
+        status, body = connect(client_id=config.DESK_ID, role="desk", secret="city-pass-1")
+        self.assertEqual(status, 200, body)
+        status, body = connect(client_id="juan", role="resident")  # residents need no PIN
+        self.assertEqual(status, 200, body)
+
+        for bad in [dict(client_id="tanod-a", role="responder", secret="9999"),
+                    dict(client_id="tanod-a", role="responder"),
+                    dict(client_id="nobody", role="responder", secret="1234"),
+                    dict(client_id="tanod-a", role="desk", secret="1234"),
+                    dict(client_id=config.DESK_ID, role="desk", secret="wrong-pass")]:
+            status, body = connect(**bad)
+            self.assertEqual(status, 401, bad)
+            self.assertIn("sign in", body["error"].replace("sign-in", "sign in"))
+        status, _ = connect(client_id="tanod-a", role="responder", secret="has space")
+        self.assertEqual(status, 400)
+
+    def test_config_names_the_desk_account(self):
+        self.assertEqual(self.request("GET", "/api/config")[1]["desk_id"], config.DESK_ID)
+
     def test_body_must_be_a_json_object(self):
         self.assertEqual(self.request("POST", "/api/connect", raw=b"not json")[0], 400)
         self.assertEqual(self.request("POST", "/api/connect", raw=b"[1, 2]")[0], 400)
@@ -184,6 +218,7 @@ class GatewayTest(unittest.TestCase):
 
     def test_send_rejects_commands_a_browser_may_not_send(self):
         session, _ = self.connect("res-1", "resident")
+        self.send(session, "WHOAMI")  # allowed
         for line in ["HELLO someone-else desk", "MSG 1 a NORMAL {}", "report lowercase"]:
             body = self.send(session, line, expect=400)
             self.assertIn("not allowed", body["error"])
@@ -271,34 +306,85 @@ class BrokerSessionTest(unittest.TestCase):
     def tearDown(self):
         self.listener.close()
 
-    def accept(self):
-        self.listener.settimeout(WAIT)
-        conn, _ = self.listener.accept()
-        conn.settimeout(WAIT)
-        return conn, conn.makefile("r", encoding="utf-8", newline="\n")
+    def fake_broker(self, script):
+        """Accept one connection on a thread and run script(conn, reader) there."""
+        result = {}
 
-    def test_sends_hello_answers_ping_and_forwards_other_lines(self):
+        def run():
+            self.listener.settimeout(WAIT)
+            conn, _ = self.listener.accept()
+            conn.settimeout(WAIT)
+            reader = conn.makefile("r", encoding="utf-8", newline="\n")
+            result["conn"], result["reader"] = conn, reader
+            result["seen"] = script(conn, reader)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread, result
+
+    @staticmethod
+    def accept_hello(conn, reader):
+        """Read HELLO and PING; answer PONG (the broker accepted HELLO)."""
+        seen = [reader.readline(), reader.readline()]
+        conn.sendall(b"PONG\n")
+        return seen
+
+    def test_login_sends_hello_with_secret_then_ping(self):
+        thread, fake = self.fake_broker(self.accept_hello)
+        session = gateway.BrokerSession("tanod-a", "responder", self.addr, secret="1234")
+        thread.join(WAIT)
+        self.assertEqual(fake["seen"], ["HELLO tanod-a responder 1234\n", "PING\n"])
+        session.close()
+        fake["conn"].close()
+
+    def test_login_refused_raises_and_closes(self):
+        def refuse(conn, reader):
+            seen = [reader.readline(), reader.readline()]
+            conn.sendall(b"ERR sign-in failed: wrong ID, PIN or password\n")
+            return seen
+        thread, fake = self.fake_broker(refuse)
+        with self.assertRaises(gateway.LoginRefused) as ctx:
+            gateway.BrokerSession("tanod-a", "responder", self.addr, secret="0000")
+        self.assertIn("sign-in failed", str(ctx.exception))
+        thread.join(WAIT)
+        fake["conn"].close()
+
+    def test_catch_up_lines_before_pong_are_kept(self):
+        def catch_up(conn, reader):
+            reader.readline(), reader.readline()
+            conn.sendall(b"MSG m1 brgy.a.b.noise NORMAL {}\nPONG\n")
+        thread, fake = self.fake_broker(catch_up)
+        session = gateway.BrokerSession("tanod-a", "responder", self.addr, secret="1234")
+        self.assertEqual(session.lines.get(timeout=WAIT), "MSG m1 brgy.a.b.noise NORMAL {}")
+        session.close()
+        thread.join(WAIT)
+        fake["conn"].close()
+
+    def test_answers_ping_and_forwards_other_lines(self):
+        thread, fake = self.fake_broker(self.accept_hello)
         session = gateway.BrokerSession("res-1", "resident", self.addr)
-        conn, reader = self.accept()
-        self.assertEqual(reader.readline(), "HELLO res-1 resident\n")
-        conn.sendall(b"PING\nREPORTED abc123\n\n")
-        self.assertEqual(reader.readline(), "PONG\n")  # answered by the gateway
+        thread.join(WAIT)
+        self.assertEqual(fake["seen"][0], "HELLO res-1 resident\n")  # no secret for residents
+        fake["conn"].sendall(b"PING\nREPORTED abc123\n\n")
+        self.assertEqual(fake["reader"].readline(), "PONG\n")  # answered by the gateway
         self.assertEqual(session.lines.get(timeout=WAIT), "REPORTED abc123")  # PING and blank line not forwarded
         session.close()
-        conn.close()
+        fake["conn"].close()
 
     def test_queues_closed_sentinel_when_broker_hangs_up(self):
+        thread, fake = self.fake_broker(self.accept_hello)
         session = gateway.BrokerSession("res-1", "resident", self.addr)
-        conn, reader = self.accept()
-        reader.readline()
-        reader.close()  # the makefile holds the socket open until it closes too
-        conn.close()
+        thread.join(WAIT)
+        fake["reader"].close()  # the makefile holds the socket open until it closes too
+        fake["conn"].close()
         self.assertIs(session.lines.get(timeout=WAIT), gateway.CLOSED)
         self.assertTrue(session.closed.wait(WAIT))
 
     def test_close_is_idempotent(self):
+        thread, fake = self.fake_broker(self.accept_hello)
         session = gateway.BrokerSession("res-1", "resident", self.addr)
-        conn, _ = self.accept()
+        thread.join(WAIT)
+        conn = fake["conn"]
         session.close()
         session.close()
         conn.close()

@@ -9,6 +9,7 @@ Sumbong lets residents of **Jaro district, Iloilo City** (its 42 barangays) repo
 - **Reliable delivery (at-least-once)**: every report is saved to SQLite before it is confirmed, resent until the subscriber ACKs it, and kept for subscribers who are offline. Clients drop duplicates by message ID.
 - **Status and escalation**: responders mark reports RESPONDING and RESOLVED, and the resident follows their own report. A report with no response within 2 minutes, or not resolved within 3 minutes of filing (demo timings), goes to the city desk, exactly once. A resident may withdraw a mistaken report before anyone responds.
 - **Anonymity and access**: anonymous reports never reveal the reporter, not even in status updates. Each role may only subscribe to its own topics (desk: escalations, responders: barangay topics, residents: advisories).
+- **Sign-in**: residents sign in with an ID only. Tanods and captains need an ID and a PIN, and the one city desk needs a password; the barangay captain or admin creates these accounts with `users.py` (see [Accounts](#accounts)). A tanod account tied to a barangay can only cover, update and post advisories for that barangay. After 5 wrong tries an ID is locked for 5 minutes.
 - **Advisories**: captains, tanods and the city desk post announcements to a barangay's residents.
 
 The protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md) and the database in [docs/DATABASE.md](docs/DATABASE.md).
@@ -25,9 +26,18 @@ git clone https://github.com/hiimkhel/eSumbong.git
 cd eSumbong
 ```
 
-There is nothing to install for the command-line system. The database `sumbong.db` is created when the broker first starts. To start over, stop the broker and delete `sumbong.db*`.
+There is nothing to install for the command-line system. The database `sumbong.db` is created when the broker first starts. To start over, stop the broker and delete `sumbong.db*` (this also deletes the accounts).
 
-Run the backend tests (139 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
+Create the accounts before the first responder signs in (each command asks for the PIN or password twice, hidden):
+
+```
+python users.py desk-password
+python users.py add --barangay san-roque --position tanod     # makes SR-T01
+python users.py add --barangay san-roque --position tanod     # makes SR-T02
+python users.py add --barangay san-roque --position captain   # makes SR-CAPT
+```
+
+Run the backend tests (180 tests, about 15 seconds). See [Testing](#testing) for the web app tests and the live-server check:
 
 ```
 python -m unittest discover -s tests
@@ -49,8 +59,8 @@ Start the broker first, then any number of clients, each in its own terminal, fr
 | --- | --- | --- |
 | 1 | `python broker.py` | the broker on 127.0.0.1:5050 (`--verbose` logs every line) |
 | 2 | `python status.py --watch` | read-only status screen, refreshes every 2 s |
-| 3 | `python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#` | a tanod |
-| 4 | `python responder.py --id city --role desk --sub city.iloilo.escalated.#` | the city desk |
+| 3 | `python responder.py --id SR-T01 --sub brgy.san-roque.purok-3.#` | a tanod (asks for the PIN) |
+| 4 | `python responder.py --role desk --sub city.iloilo.escalated.#` | the city desk (asks for the desk password) |
 | 5 | `python resident.py --id resident1` | a resident |
 
 Type `help` in a client for its commands. The main ones:
@@ -58,7 +68,26 @@ Type `help` in a client for its commands. The main ones:
 - **Resident**: `report <barangay> <purok> <category> [anon] <what happened>`, `withdraw <report_id>`, `follow <barangay>`, `mine`.
 - **Responder or desk**: `respond <report_id> [note]`, `resolve <report_id> [note]`, `advisory <barangay> [urgent] <text>`, `sub` / `unsub <pattern>`, `history`.
 
-Settings such as the port, timers and the barangay list are in [config.py](config.py).
+Settings such as the port, timers and the barangay list are in [config.py](config.py). The escalation timers are **demo values** (2 min without a response, 3 min unresolved, closed reports hidden from HISTORY after 10 min) so the demo fits in a class period. For real use, set `ESCALATE_SECONDS = 1800`, `UNRESOLVED_ESCALATE_SECONDS = 86400` and `RESOLVED_HIDE_SECONDS = 604800` (30 min, 24 h, 7 days) and restart the broker.
+
+## Accounts
+
+Residents need no account. Responders (tanods, captains) and the city desk sign in with accounts kept in `sumbong.db`. Manage them from the repository folder, on the machine running the broker. The broker may be running, and changes apply at the next sign-in:
+
+| Command | What it does |
+| --- | --- |
+| `python users.py add --barangay <barangay> --position tanod` | add a tanod; the ID is made for you: the barangay's code, `T` and the next number (`SR-T01`, `SR-T02`, ...) |
+| `python users.py add --barangay <barangay> --position captain` | add the barangay's captain (`SR-CAPT`; one per barangay) |
+| `python users.py add --id <id> [--barangay <barangay>]` | an account with your own ID, e.g. a test account; without `--barangay` it covers all of Jaro |
+| `python users.py reset-pin <id>` | give an account a new PIN (e.g. a forgotten one) |
+| `python users.py remove <id>` | delete an account and its subscriptions; an open session lasts until it disconnects |
+| `python users.py list [--barangay <barangay>]` | accounts with their position, barangay and date added (never PINs) |
+| `python users.py codes` | every barangay's code (`SR` San Roque, `MHP` M.H. del Pilar, ...) |
+| `python users.py desk-password` | set or change the city desk password (the desk always signs in as `city`) |
+
+IDs ignore case at sign-in, so a tanod may type `sr-t01`. Tanod numbers are never reused while a higher one exists: after removing SR-T02, the next tanod is still SR-T04 if SR-T03 exists. The codes are in `config.BARANGAY_CODES`.
+
+PINs need at least 4 characters and the desk password at least 8, with no spaces. They are typed at a hidden prompt, never on the command line, and stored only as salted hashes. After 5 wrong tries an ID is locked for 5 minutes; restarting the broker clears the locks.
 
 ## Web App Scripts (React)
 
@@ -114,21 +143,23 @@ python tests/live_smoke.py --url <URL>
 python tests/live_smoke.py --url <URL> --full
 ```
 
-Every step should print `PASS` and the last line should be `10/10 steps passed` (`12/12` with `--full`); the exit code is 1 on any failure. It checks that the app is served, connects a resident, two responders and the desk, and covers the gateway command filter, role rules, a NORMAL report, anonymity, RESPONDING/RESOLVED, HISTORY, WITHDRAW and topic isolation. `--full` adds an URGENT fire escalation to the city desk and an advisory.
+It signs in as a real responder account, so create one once, on the server: `python users.py add --id smoke-tanod --barangay san-roque`. The script asks for that PIN (and, with `--full`, the desk password) at a hidden prompt, or reads `SMOKE_TANOD_PIN` and `SMOKE_DESK_PASSWORD`. Use `--tanod <id>` for a different account.
 
-The test writes to the live database. Its IDs (`smoke-res-<tag>` and so on) and purok (`smoke-<tag>`) are unique per run, every description starts with `[SMOKE TEST]`, every report ends RESOLVED or WITHDRAWN, and its subscriptions are removed at the end. Anyone subscribed to the whole barangay still sees the test reports, and `--full` notifies the city desk and the barangay's residents, so tell the group chat before running it on a server people are using. Use `--barangay <id>` to choose a quieter barangay.
+Every step should print `PASS` and the last line should be `11/11 steps passed` (`13/13` with `--full`); the exit code is 1 on any failure. It checks that the app is served, that a wrong PIN, a missing PIN and a false desk claim are refused, then covers the gateway command filter, role rules, a NORMAL report, anonymity, RESPONDING/RESOLVED, HISTORY, WITHDRAW and topic isolation. `--full` adds an URGENT fire escalation to the city desk and an advisory.
+
+The test writes to the live database. Its resident ID (`smoke-res-<tag>`) and purok (`smoke-<tag>`) are unique per run, every description starts with `[SMOKE TEST]`, every report ends RESOLVED or WITHDRAWN, and only the subscriptions it added are removed at the end. Anyone subscribed to the whole barangay still sees the test reports. `--full` signs in as the city desk, which **disconnects an open desk session**, and it notifies the desk and the barangay's residents, so tell the group chat before running it on a server people are using. Use `--barangay <id>` to choose a quieter barangay.
 
 **3. Manual browser check** (about 5 minutes). Use two browser windows, one of them private so the sign-ins don't mix, or a phone on the same network if the gateway runs with `--host 0.0.0.0`:
 
 | # | Window | Action | Expected |
 | --- | --- | --- | --- |
 | 1 | A | Open `<URL>` | Home page loads; the bar shows Report and Responder desk |
-| 2 | A | Responder desk, sign in as `tanod-test` (Responder), click the **All of Jaro** preset | Coverage shows `brgy.#`; the feed says "Listening for reports" |
+| 2 | A | Responder desk: first try `SR-T01` (Responder) with a wrong PIN, then the right one. Subscribe to `brgy.san-roque.#` | The wrong PIN shows "Couldn't sign in" and clears the field. Once signed in, the preset reads **All of San Roque** (the account's own barangay) and the topic list offers only San Roque. Coverage shows `brgy.san-roque.#` and the feed says "Listening for reports". |
 | 3 | B | Report, sign in as `resident-test`, pick San Roque, `Purok 3`, Noise, type a description, **Send report** | Toast "Report sent"; the report appears under Your reports as Received |
 | 4 | A | Watch the feed | The report appears with `resident-test` as reporter; the Open count goes up |
 | 5 | A | Type a note, click **Respond** | Badge turns Responding; toast confirms |
 | 6 | B | Watch the report | The tracker moves to Responding and shows the note |
-| 7 | A | Click **Resolve** | The card dims; the Resolved count goes up |
+| 7 | A | Click **Resolve** (within 3 minutes of step 3, see note below) | The card dims; the Resolved count goes up |
 | 8 | B | Watch the report | Resolved; the hide (✕) button appears |
 | 9 | B | Send an anonymous **Fire** report | Urgent warning before sending; "Escalated to city" badge after |
 | 10 | A | Watch the feed | The fire report is at the top, marked Urgent, reporter "Anonymous" |
@@ -138,27 +169,35 @@ The test writes to the live database. Its IDs (`smoke-res-<tag>` and so on) and 
 | 14 | — | Stop the broker (Ctrl+C), wait a moment | Both windows return to sign-in with "Broker closed the connection" |
 | 15 | — | Start the broker again and sign in with the same IDs | Reports and subscriptions are back |
 
-Resolve or withdraw anything you created by hand. If a step fails, note the step number and open **Protocol log** at the bottom of the page: it shows every line sent and received.
+**Timing:** with the demo timers in `config.py`, a report escalates to the city if nobody responds within 2 minutes, or if it is not resolved 3 minutes after filing. Once escalated, a tanod's card shows "Only the city desk can resolve it" instead of **Resolve**. Do steps 3–7 within 3 minutes, or resolve the report as the City desk (subscribe to `city.iloilo.escalated.#`).
+
+Also check the city desk: sign out in window A, choose **City desk**, and confirm it asks only for the password, then sign in with it.
+
+Resolve or withdraw anything you created by hand. If a step fails, note the step number and open **Protocol log** at the bottom of the responder desk: it shows every line sent and received (residents don't see it).
 
 ## Demo Script
 
-Delete `sumbong.db*` first for a clean start. Each step names the terminal to type in.
+Delete `sumbong.db*` first for a clean start, then create the accounts: `python users.py desk-password`, then `python users.py add --barangay san-roque --position tanod` twice (SR-T01 is Tanod A, SR-T02 is Tanod B) and `python users.py add --barangay san-roque --position captain` (SR-CAPT). Each responder asks for its PIN when it starts. Each step names the terminal to type in.
 
 1. **Empty status screen.** Run `python broker.py`, then `python status.py --watch`. It shows "No reports yet."
 2. **Connect Tanod A, Tanod B, Captain and the city desk**, plus one resident:
    ```
-   python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#
-   python responder.py --id tanod-b --sub brgy.san-roque.purok-5.# --sub brgy.san-roque.advisory
-   python responder.py --id captain --sub brgy.san-roque.purok-3.#
-   python responder.py --id city --role desk --sub city.iloilo.escalated.#
+   python responder.py --id SR-T01 --sub brgy.san-roque.purok-3.#
+   python responder.py --id SR-T02 --sub brgy.san-roque.purok-5.# --sub brgy.san-roque.advisory
+   python responder.py --id SR-CAPT --sub brgy.san-roque.purok-3.#
+   python responder.py --role desk --sub city.iloilo.escalated.#
    python resident.py --id resident1
    ```
 3. **The anonymous noise report in Purok 3 reaches Tanod A and the Captain only.** As Resident 1: `report san-roque purok-3 noise anon Loud karaoke past midnight`. Tanod A and the Captain print it "from anonymous". Tanod B (Purok 5) and the city desk get nothing (noise is NORMAL).
-4. **Tanod A sends RESPONDING and Resident 1 sees it.** As Tanod A: `respond <report_id> on the way`. Resident 1 prints "is now RESPONDING by tanod-a - on the way".
+4. **Tanod A sends RESPONDING and Resident 1 sees it.** As Tanod A: `respond <report_id> on the way`. Resident 1 prints "is now RESPONDING by SR-T01 - on the way".
 5. **Tanod A sends RESOLVED and Resident 1 sees it.** As Tanod A: `resolve <report_id> settled`. Resident 1 prints "is now RESOLVED".
 6. **Close Tanod B, then send a fire report and an advisory.** Tanod B: `quit`. Captain: `advisory san-roque Clean-up drive on Saturday`. Then Resident 1: `report san-roque purok-5 fire Smoke near the chapel`. The city desk gets the fire report at once (URGENT).
-7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id tanod-b --drop-ack 1` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
-8. **(Bonus) Dropped ACK shows a retry and "duplicate ignored".** Because of `--drop-ack 1`, Tanod B skipped its ACK for the fire report. About 5 seconds later the broker resends the same message and Tanod B prints "duplicate ... ignored". The status screen shows that delivery with ATTEMPTS 2.
+7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id SR-T02` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
+8. **(Bonus) A lost ACK is resent.** In a new terminal, start a bare client that files a report and never ACKs anything:
+   ```
+   python -c "import socket;s=socket.create_connection(('127.0.0.1',5050));s.sendall(b'HELLO raw-res resident\nREPORT brgy.san-roque.purok-3.noise N lost ack demo\n');[print(l,end='',flush=True) for l in s.makefile()]"
+   ```
+   It prints `REPORTED <report_id>`. As Tanod A: `respond <report_id>`. The bare client prints the status `MSG` and then the **same msg_id again about every 5 seconds**, because the broker keeps resending until it gets an ACK; the status screen shows ATTEMPTS going up. (The real clients ACK at once and drop such repeats by msg_id; `tests/test_clients.py` shows "duplicate ignored".) Close that terminal, then as Tanod A: `resolve <report_id>`.
 9. **A noise report escalates to the city desk after 2 minutes.** As Resident 1: `report san-roque purok-3 noise Barking dogs all night`. Nobody responds. About 2 minutes later (checked every 10 s) the city desk prints "ESCALATED to the city ... No response within 2 minutes". Only the desk can resolve it now: as `city`, `resolve <report_id> handled by the city`.
 
 ## Team and Responsibilities
@@ -171,8 +210,9 @@ Delete `sumbong.db*` first for a clean start. Each step names the terminal to ty
 | Jan Dennis | Status & Escalation | escalation.py |
 | Kelly | Clients | resident.py, responder.py, status.py, client.py |
 | Arvin | Web app (extra) | frontend/ (React interface and gateway.py) |
+| *(to assign)* | Sign-in (extra) | auth.py, users.py |
 
-Tests are in `tests/`, one file per module, plus `test_clients.py` and `test_reliability.py` for the fault tests, `test_gateway.py` for the web gateway and `live_smoke.py` for the live-server check. The web app's tests sit next to the code as `frontend/src/**/*.test.js(x)`, with a simulated gateway in `frontend/src/test/fakeGateway.js`.
+Tests are in `tests/`, one file per module, plus `test_clients.py` and `test_reliability.py` for the fault tests, `test_gateway.py` for the web gateway, `test_auth.py` for sign-in and `live_smoke.py` for the live-server check. The web app's tests sit next to the code as `frontend/src/**/*.test.js(x)`, with a simulated gateway in `frontend/src/test/fakeGateway.js`.
 
 ## Contribution Rules
 

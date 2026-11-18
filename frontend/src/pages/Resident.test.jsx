@@ -50,6 +50,7 @@ describe("Resident sign-in", () => {
     await signIn("juan");
     expect(gw.connects).toEqual([{ client_id: "juan", role: "resident" }]);
     expect(screen.getByLabelText("Connected as juan")).toBeInTheDocument();
+    expect(screen.queryByText("Protocol log")).toBeNull(); // raw broker lines are for the responder desk only
   });
 
   it("shows the gateway error if the broker is down", async () => {

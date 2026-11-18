@@ -25,6 +25,16 @@ describe("useConnection", () => {
     ]);
   });
 
+  it("a sign-in with a PIN is not remembered, and the PIN is never stored or logged", async () => {
+    installFakeGateway();
+    const { result } = renderHook(() => useConnection({ page: "responder" }));
+    await act(() => result.current.connect("tanod-a", "responder", "1234"));
+    expect(sessionStorage.getItem("esumbong.signin.responder")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("esumbong.lastId.responder"))).toEqual({ id: "tanod-a", role: "responder" });
+    expect(result.current.log[0].line).toBe("HELLO tanod-a responder ••••");
+    expect(JSON.stringify(result.current.log)).not.toContain("1234");
+  });
+
   it("restores the saved sign-in values on mount", () => {
     installFakeGateway();
     sessionStorage.setItem("esumbong.signin.responder", JSON.stringify({ id: "t1", role: "desk" }));

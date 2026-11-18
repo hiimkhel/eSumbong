@@ -30,6 +30,11 @@ describe("parseLine", () => {
     expect(parseLine("SUBS").patterns).toEqual([]);
   });
 
+  it("parses ME (reply to WHOAMI)", () => {
+    expect(parseLine("ME tanod-a responder san-roque")).toMatchObject({ clientId: "tanod-a", role: "responder", barangay: "san-roque" });
+    expect(parseLine("ME city desk -").barangay).toBeNull();
+  });
+
   it("parses REPORTED, POSTED, UPDATED and ERR", () => {
     expect(parseLine("REPORTED abc").reportId).toBe("abc");
     expect(parseLine("POSTED adv1").advisoryId).toBe("adv1");
@@ -144,6 +149,23 @@ describe("Connection", () => {
     expect(gw.stream.url).toBe("/api/events?session=s1");
     expect(conn.connected).toBe(true);
     expect(onState).toHaveBeenLastCalledWith("online");
+  });
+
+  it("sends the PIN only when there is one", async () => {
+    const { gw, conn } = setup();
+    await conn.connect("tanod-a", "responder", "1234");
+    await conn.connect("juan", "resident");
+    expect(gw.connects).toEqual([
+      { client_id: "tanod-a", role: "responder", secret: "1234" },
+      { client_id: "juan", role: "resident" },
+    ]);
+  });
+
+  it("surfaces a refused sign-in", async () => {
+    installFakeGateway({ accounts: { "tanod-a": "1234" } });
+    const conn = new Connection({ onLine: () => {} });
+    await expect(conn.connect("tanod-a", "responder", "0000")).rejects.toThrow("sign-in failed");
+    expect(conn.connected).toBe(false);
   });
 
   it("surfaces the gateway's error message when connect fails", async () => {

@@ -130,7 +130,7 @@ class RestartTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = os.path.join(tmp, "sumbong.db")
 
-            b1 = broker.Broker("127.0.0.1", 0, db)
+            b1 = broker.Broker("127.0.0.1", 0, db, require_auth=False)
             _, port = b1.start()
             tanod = Client(port)
             tanod.send("HELLO tanod1 responder")
@@ -144,7 +144,7 @@ class RestartTest(unittest.TestCase):
             res.close()
             b1.stop()
 
-            b2 = broker.Broker("127.0.0.1", 0, db)
+            b2 = broker.Broker("127.0.0.1", 0, db, require_auth=False)
             _, port = b2.start()
             try:
                 self.assertEqual(store.get_report(report_id)["status"], "RECEIVED")

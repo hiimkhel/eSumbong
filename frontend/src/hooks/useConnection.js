@@ -47,10 +47,12 @@ export function useConnection({ page, onEvent, onState }) {
     };
   }, [conn]);
 
-  const connect = useCallback(async (clientId, role) => {
-    await conn.connect(clientId, role);
-    appendLog("→", `HELLO ${clientId} ${role}`);
-    storageSet("sessionStorage", savedKey, { id: clientId, role });
+  // secret (PIN / desk password) is never stored or logged. A sign-in that
+  // needed one is not remembered for automatic sign-in after a reload.
+  const connect = useCallback(async (clientId, role, secret) => {
+    await conn.connect(clientId, role, secret);
+    appendLog("→", `HELLO ${clientId} ${role}${secret ? " ••••" : ""}`);
+    storageSet("sessionStorage", savedKey, secret ? null : { id: clientId, role });
     storageSet("localStorage", lastKey, { id: clientId, role });
   }, [conn, appendLog, savedKey, lastKey]);
 

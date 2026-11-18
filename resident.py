@@ -65,8 +65,6 @@ def handle(kind, data):
             client.say("Following advisories from: " + ", ".join(config.BARANGAYS.get(b, b) for b in follows))
     elif kind == "DUPLICATE":
         client.say(f"(duplicate {data} ignored)")
-    elif kind == "NOTE":
-        client.say(f"({data})")
     elif kind == "ERR":
         client.say(f"! {data}")
     elif kind == "CLOSED":
