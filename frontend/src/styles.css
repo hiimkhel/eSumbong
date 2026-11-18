@@ -1018,3 +1018,5 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
   border: 0; background: none; font: 600 0.86rem var(--font-text); color: var(--ink-3); cursor: pointer;
 }
 .hidden-toggle:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+
+.advisory-recent { margin-top: 16px; }

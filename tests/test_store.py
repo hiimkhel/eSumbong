@@ -202,6 +202,16 @@ class DeliveriesTest(StoreTestCase):
         self.assertEqual(rows[0]["priority"], "URGENT")
         self.assertEqual(store.pending_for("nobody"), [])
 
+    def test_pending_for_urgent_first(self):
+        store.save_message("old-normal", None, "brgy.tacas.advisory", "NORMAL", "{}",
+                           recipients=["tanod9"], created_at=900.0)
+        store.save_message("new-urgent", "r9", "brgy.tacas.p1.fire", "URGENT", "{}",
+                           recipients=["tanod9"], created_at=1100.0)
+        store.save_message("newer-normal", "r8", "brgy.tacas.p1.noise", "NORMAL", "{}",
+                           recipients=["tanod9"], created_at=1200.0)
+        self.assertEqual([r["msg_id"] for r in store.pending_for("tanod9")],
+                         ["new-urgent", "old-normal", "newer-normal"])
+
     def test_due_for_retry(self):
         store.mark_sent("m1", "tanod1", now=1000.0)
         store.mark_sent("m1", "tanod2", now=1004.0)

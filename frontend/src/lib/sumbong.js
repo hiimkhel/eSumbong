@@ -51,6 +51,7 @@ export function parseLine(line) {
   if (command === "HISTEND") return { command, count: Number(splitMax(line, 2)[1]) || 0, raw: line };
   if (command === "SUBS") return { command, patterns: line.split(" ").slice(1).filter(Boolean), raw: line };
   if (command === "REPORTED") return { command, reportId: splitMax(line, 2)[1], raw: line };
+  if (command === "POSTED") return { command, advisoryId: splitMax(line, 2)[1], raw: line };
   if (command === "UPDATED") {
     const parts = splitMax(line, 3);
     return { command, reportId: parts[1], status: parts[2], raw: line };

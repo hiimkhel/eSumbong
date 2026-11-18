@@ -40,6 +40,13 @@ export function barangayName(id) {
   return barangayNames[id] || titleCase(id);
 }
 
+// Who posted an advisory: "Barangay San Roque · tanod-b" or "Iloilo City desk · city".
+export function advisorySender(body) {
+  if (!body?.from) return "";
+  const office = body.from_role === "desk" ? "Iloilo City desk" : `Barangay ${barangayName(body.barangay)}`;
+  return `${office} · ${body.from}`;
+}
+
 // "brgy.san-roque.purok-3.fire" -> "San Roque · Purok 3"
 export function placeFromTopic(topic) {
   const parts = String(topic || "").split(".");

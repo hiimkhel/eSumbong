@@ -9,7 +9,7 @@ import { useToast } from "../components/Toast.jsx";
 import { CategoryTile, EmptyState, FieldError, HiddenToggle, StatusStepper } from "../components/ui.jsx";
 import { useConnection } from "../hooks/useConnection.js";
 import { useDismissed } from "../hooks/useDismissed.js";
-import { barangayName, categoryMeta, clockTime, isClosed, placeFromTopic, titleCase } from "../lib/format.js";
+import { advisorySender, barangayName, categoryMeta, clockTime, isClosed, placeFromTopic, titleCase } from "../lib/format.js";
 import { loadConfig, oneLine, topicLevel } from "../lib/sumbong.js";
 
 const STATUS_TOPIC = /^report\.[^.]+\.status$/;
@@ -441,7 +441,7 @@ export default function Resident() {
                         {a.priority === "URGENT" ? <Siren size={18} /> : <Megaphone size={18} />}
                         <div>
                           <p>{a.body?.description || JSON.stringify(a.body)}</p>
-                          <small>{clockTime(a.time)}</small>
+                          <small>{[advisorySender(a.body), clockTime(a.time)].filter(Boolean).join(" · ")}</small>
                         </div>
                       </li>
                     ))}
