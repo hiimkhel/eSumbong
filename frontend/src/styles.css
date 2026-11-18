@@ -344,18 +344,18 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
     inset 0 0 0 1.5px rgba(255, 255, 255, 0.14),
     inset 0 0 0 4px #05080F;
   transform-style: preserve-3d;
-  transform: rotateZ(10deg) rotateY(-17deg) rotateX(4deg);
+  transform: rotateZ(11deg) rotateY(-9deg) rotateX(2deg);
 }
 /* Body thickness: metal layers behind the face show as the side edge */
 .device::before, .device::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
 }
 .device::before {
-  transform: translateZ(-10px);
+  transform: translateZ(-13px);
   background: linear-gradient(90deg, #2A3350, #6E7FA6 70%, #9AAAD0 92%, #4A5878);
 }
 .device::after {
-  transform: translateZ(-20px);
+  transform: translateZ(-26px);
   background: linear-gradient(90deg, #1D2440, #55658C 75%, #7D8DB5 95%, #39466A);
   box-shadow: 30px 40px 60px -20px rgba(0, 4, 15, 0.7);
 }
@@ -367,7 +367,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.85em; }
 .device-btn.power {
   right: -4px; top: 170px; height: 72px;
   background: linear-gradient(270deg, #5B6B90, #9AAAD0);
-  transform: translateZ(-10px); /* sits on the visible side edge */
+  transform: translateZ(-13px); /* sits on the visible side edge */
 }
 
 .device-screen {
