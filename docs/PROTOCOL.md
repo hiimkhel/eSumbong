@@ -14,6 +14,8 @@
 | Responder → Broker | STATUS <report_id> <RESPONDING/RESOLVED> <note> | Publish a status update (responder or desk; note may be empty) |
 | Resident → Broker | WITHDRAW <report_id> <reason> | Take back one's own report while it is still RECEIVED (reason optional); it becomes WITHDRAWN and is published like a status update, without updated_by |
 | Broker → Responder | UPDATED <report_id> <status> | Status saved; the update is published as MSG on report.<report_id>.status and on the incident topic, with note and updated_by added to the body |
+| Responder/Desk → Broker | ADVISORY <barangay> <URGENT/NORMAL> <text> | Post an announcement on brgy.<barangay>.advisory |
+| Broker → Responder/Desk | POSTED <advisory_id> | Advisory stored and published; its MSG body has advisory_id, topic, barangay, priority, description, from (client_id) and from_role (responder/desk) |
 | Client → Broker | SUBS | Ask for this client's saved subscriptions |
 | Broker → Client | SUBS <pattern> <pattern> ... | Reply to SUBS; just "SUBS" when there are none |
 | Client → Broker | HISTORY | Ask for the current state of reports this client's subscriptions cover (latest 50) |
@@ -31,7 +33,8 @@
 - Status topic: report.<report_id>.status
 - Escalation topic: city.iloilo.escalated.<barangay>
 - * matches exactly one level; # matches zero or more levels and must be the last level.
-- Fire, fight, and flood are URGENT; all other categories are NORMAL.
+- Fire, fight, and flood are URGENT; all other categories are NORMAL. Advisories are URGENT or NORMAL as posted.
+- Catch-up on HELLO sends a client's waiting messages URGENT first, then NORMAL, each oldest first.
 
 ## Escalation (escalation.py)
 

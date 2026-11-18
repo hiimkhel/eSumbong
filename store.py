@@ -353,11 +353,13 @@ _PENDING_SELECT = (
 
 
 def pending_for(client_id):
-    """Every PENDING message for a client, oldest first. Used for offline
-    catch-up when the client sends HELLO."""
+    """Every PENDING message for a client: URGENT first, then NORMAL, each
+    oldest first. Used for offline catch-up when the client sends HELLO, so
+    a fire report reaches a returning tanod before an older advisory."""
     with _lock:
         rows = _db().execute(
-            _PENDING_SELECT + " AND d.client_id = ? ORDER BY m.created_at, m.rowid",
+            _PENDING_SELECT + " AND d.client_id = ?"
+            " ORDER BY m.priority = 'URGENT' DESC, m.created_at, m.rowid",
             (client_id,),
         ).fetchall()
     return [dict(r) for r in rows]

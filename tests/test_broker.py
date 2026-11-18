@@ -309,6 +309,57 @@ class ScopeTest(BrokerTestCase):
         self.assertIn(f"report.{report_id}.status", store.subscriptions_for("juan"))
 
 
+class AdvisoryTest(BrokerTestCase):
+    """ADVISORY, and urgent-first catch-up (demo: "fire report arrives first")."""
+
+    def test_captain_posts_advisory_residents_get_it(self):
+        res = self.client("juan", "resident")
+        res.send("SUB brgy.san-roque.advisory")
+        res.sync()
+        captain = self.client("captain", "responder")
+        reply = captain.ask("ADVISORY san-roque NORMAL Water interruption 1-5 PM tomorrow")
+        self.assertRegex(reply, r"^POSTED [0-9a-f]{8}$")
+        msg_id, topic, priority, body = parse_msg(res.recv())
+        self.assertEqual((topic, priority), ("brgy.san-roque.advisory", "NORMAL"))
+        self.assertEqual((body["advisory_id"], body["description"], body["from"], body["from_role"]),
+                         (reply.split()[1], "Water interruption 1-5 PM tomorrow", "captain", "responder"))
+        res.send(f"ACK {msg_id}")
+        res.sync()
+        self.assertEqual(store.get_delivery(msg_id, "juan")["status"], "DELIVERED")
+
+    def test_desk_may_post_urgent_advisory(self):
+        desk = self.client("city", "desk")
+        self.assertTrue(desk.ask("ADVISORY tacas URGENT Flood warning, move to higher ground")
+                        .startswith("POSTED "))
+
+    def test_refused_advisories(self):
+        res = self.client("juan", "resident")
+        self.assertEqual(res.ask("ADVISORY san-roque NORMAL hi"),
+                         "ERR only responders and the desk can post an ADVISORY")
+        captain = self.client("captain", "responder")
+        for bad in ["ADVISORY", "ADVISORY san-roque NORMAL", "ADVISORY san-roque NORMAL  ",
+                    "ADVISORY molo NORMAL hi", "ADVISORY san-roque LOUD hi"]:
+            self.assertTrue(captain.ask(bad).startswith("ERR "), bad)
+
+    def test_reconnecting_tanod_gets_fire_report_first(self):
+        tanod_b = self.client("tanod-b", "responder")
+        tanod_b.send("SUB brgy.san-roque.#")
+        tanod_b.sync()
+        self.disconnect(tanod_b, "tanod-b")
+        # While Tanod B is away: an advisory first, then a fire report.
+        self.client("captain", "responder").ask("ADVISORY san-roque NORMAL Clean-up drive Saturday")
+        res = self.client("juan", "resident")
+        res.ask("REPORT brgy.san-roque.purok-3.fire N smoke near the chapel")
+        res.sync()
+
+        tanod_b = self.client()
+        self.clients.append(tanod_b)
+        tanod_b.send("HELLO tanod-b responder")
+        first, second = parse_msg(tanod_b.recv()), parse_msg(tanod_b.recv())
+        self.assertEqual((first[2], first[3]["category"]), ("URGENT", "fire"))
+        self.assertEqual((second[1], second[2]), ("brgy.san-roque.advisory", "NORMAL"))
+
+
 class HistoryTest(BrokerTestCase):
     """SUBS and HISTORY let a client that signs in again rebuild its view."""
 

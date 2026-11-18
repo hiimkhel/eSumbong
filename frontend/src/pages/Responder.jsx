@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Building2, CheckCircle2, ChevronDown, Database, Eye, EyeOff, Clock, Inbox, MapPin, MessageSquare, Plus, Radio, ShieldCheck, Siren, Truck, User, X,
+  Building2, CheckCircle2, ChevronDown, Database, Eye, EyeOff, Clock, Inbox, MapPin, Megaphone, MessageSquare, Plus, Radio, Send,
+  ShieldCheck, Siren, Truck, User, X,
 } from "lucide-react";
 import AppBar from "../components/AppBar.jsx";
 import Combobox from "../components/Combobox.jsx";
@@ -8,10 +9,10 @@ import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import ProtocolLog from "../components/ProtocolLog.jsx";
 import SignIn from "../components/SignIn.jsx";
 import { useToast } from "../components/Toast.jsx";
-import { CategoryTile, EmptyState, HiddenToggle, StatusBadge, StatusStepper } from "../components/ui.jsx";
+import { CategoryTile, EmptyState, FieldError, HiddenToggle, StatusBadge, StatusStepper } from "../components/ui.jsx";
 import { useConnection } from "../hooks/useConnection.js";
 import { useDismissed } from "../hooks/useDismissed.js";
-import { barangayList, categoryMeta, clockTime, isClosed, placeFromTopic } from "../lib/format.js";
+import { advisorySender, barangayList, barangayName, categoryMeta, clockTime, isClosed, placeFromTopic } from "../lib/format.js";
 import { oneLine, reportCovered } from "../lib/sumbong.js";
 
 const ROLES = [
@@ -60,6 +61,11 @@ export default function Responder() {
   const [coverageOpen, setCoverageOpen] = useState(true);  // collapsible on phones only
   const seen = useRef(new Set());     // report ids already announced
   const lastSub = useRef(null);       // so an ERR right after SUB can roll it back
+  // Advisories: the post form, the one waiting for POSTED, and the latest few seen.
+  const [advForm, setAdvForm] = useState({ barangay: "", text: "", urgent: false });
+  const [advErrors, setAdvErrors] = useState({});
+  const [advisories, setAdvisories] = useState([]);
+  const postingAdvisory = useRef(null);
   const autoSignIn = useRef(false);
   const sentNotes = useRef(new Map()); // report_id -> note sent with STATUS, until UPDATED
 
@@ -101,6 +107,18 @@ export default function Responder() {
             receivedAt: existing?.receivedAt || (body.created_at ? body.created_at * 1000 : Date.now()),
           });
         });
+      } else if (event.command === "POSTED") {
+        const posted = postingAdvisory.current;
+        postingAdvisory.current = null;
+        if (!posted) return;
+        addAdvisory({ ...posted, advisory_id: event.advisoryId });
+        setAdvForm((f) => ({ ...f, text: "", urgent: false }));
+        toast(`Advisory sent to ${barangayName(posted.barangay)}.`);
+      } else if (event.command === "MSG" && event.body?.advisory_id) {
+        addAdvisory(event.body);
+        if (event.body.from !== identity.id) {
+          toast(`Advisory for ${barangayName(event.body.barangay)}: ${event.body.description}`, event.body.priority === "URGENT");
+        }
       } else if (event.command === "MSG") {
         const body = event.body;
         if (!body || !body.report_id) return;
@@ -149,6 +167,12 @@ export default function Responder() {
 
   const [dismissed, dismiss, restore] = useDismissed("responder", identity.id);
   const [hideAsk, setHideAsk] = useState(null); // report id waiting for "Hide?" confirmation
+
+  function addAdvisory(a) {
+    setAdvisories((prev) => (prev.some((x) => x.advisory_id === a.advisory_id)
+      ? prev
+      : [{ ...a, time: Date.now() }, ...prev].slice(0, 5)));
+  }
   // Hidden only once resolved: an open report must never disappear from the desk.
   const visible = useMemo(
     () => [...reports.entries()].filter(([id, r]) => !(isClosed(r.status) && dismissed.has(id))),
@@ -240,6 +264,26 @@ export default function Responder() {
       setCoverageOpen(false); // on phones, get the coverage panel out of the way of the feed
     } catch (err) {
       setSubs((prev) => prev.filter((x) => x !== p));
+      toast(err.message, true);
+    }
+  }
+
+  async function postAdvisory(e) {
+    e.preventDefault();
+    const typed = advForm.barangay.trim().toLowerCase();
+    const barangay = barangayList().find((b) => b.name.toLowerCase() === typed || b.id === typed)?.id;
+    const text = oneLine(advForm.text);
+    const errs = {};
+    if (!barangay) errs.barangay = typed ? "Not a barangay of Jaro. Pick one from the list." : "Pick the barangay this is for.";
+    if (!text) errs.text = "Write the announcement.";
+    setAdvErrors(errs);
+    if (Object.keys(errs).length) return;
+    const priority = advForm.urgent ? "URGENT" : "NORMAL";
+    postingAdvisory.current = { barangay, description: text, priority, from: identity.id, from_role: identity.role };
+    try {
+      await conn.send(`ADVISORY ${barangay} ${priority} ${text}`);
+    } catch (err) {
+      postingAdvisory.current = null;
       toast(err.message, true);
     }
   }
@@ -340,6 +384,9 @@ export default function Responder() {
                 </div>
                 </div>
               </section>
+
+              <AdvisoryCard form={advForm} setForm={setAdvForm} errors={advErrors} advisories={advisories}
+                onPost={postAdvisory} />
             </aside>
 
             <section aria-label="Report feed">
@@ -485,5 +532,63 @@ function IncidentCard({ id, report: r, role, onStatus, hidden, onDismiss, onRest
         <p className="card-sub"><Building2 size={13} /> Escalated to the city. Only the city desk can resolve it.</p>
       )}
     </li>
+  );
+}
+
+// Captains, tanods and the city desk post announcements to one barangay's
+// residents (brgy.<barangay>.advisory); the latest few are listed below.
+function AdvisoryCard({ form, setForm, errors, advisories, onPost }) {
+  const set = (field) => (e) => {
+    const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+    setForm((f) => ({ ...f, [field]: value }));
+  };
+  return (
+    <section className="card card-pad" aria-labelledby="adv-title">
+      <div className="card-head">
+        <div>
+          <h2 className="card-title" id="adv-title">Post an advisory</h2>
+          <p className="card-sub">Residents following that barangay get it right away.</p>
+        </div>
+        <Megaphone size={18} className="muted" />
+      </div>
+      <form className="form-stack" onSubmit={onPost} noValidate>
+        <label className="field">
+          <span className="field-label">Barangay</span>
+          <Combobox icon={MapPin} placeholder="Type or pick, e.g. San Roque" value={form.barangay}
+            invalid={Boolean(errors.barangay)}
+            onChange={(text) => setForm((f) => ({ ...f, barangay: text }))}
+            options={barangayList().map((b) => ({ value: b.id, label: b.name }))} />
+          {errors.barangay && <FieldError>{errors.barangay}</FieldError>}
+        </label>
+        <label className="field">
+          <span className="field-label">Announcement</span>
+          <textarea className="textarea" maxLength={300} aria-invalid={errors.text ? true : undefined}
+            placeholder="e.g. Water interruption tomorrow, 1-5 PM" value={form.text} onChange={set("text")} />
+          {errors.text && <FieldError>{errors.text}</FieldError>}
+        </label>
+        <label className="switch">
+          <input type="checkbox" checked={form.urgent} onChange={set("urgent")} />
+          <span className="switch-track" aria-hidden="true" />
+          <span className="switch-text">
+            <strong>Urgent</strong>
+            <span>For warnings like floods or fires.</span>
+          </span>
+        </label>
+        <button type="submit" className="btn btn-primary"><Send size={16} /> Send advisory</button>
+      </form>
+      {advisories.length > 0 && (
+        <ul className="advisories advisory-recent" aria-label="Recent advisories">
+          {advisories.map((a) => (
+            <li key={a.advisory_id} className={`advisory${a.priority === "URGENT" ? " is-urgent" : ""}`}>
+              {a.priority === "URGENT" ? <Siren size={18} /> : <Megaphone size={18} />}
+              <div>
+                <p>{a.description}</p>
+                <small>{a.from ? advisorySender(a) : barangayName(a.barangay)} · {clockTime(a.time)}</small>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

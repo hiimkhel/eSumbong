@@ -111,6 +111,7 @@ class Broker:
             "ACK": self.cmd_ack,
             "STATUS": self.cmd_status,
             "WITHDRAW": self.cmd_withdraw,
+            "ADVISORY": self.cmd_advisory,
             "PING": self.cmd_ping,
             "PONG": self.cmd_pong,
             "SUBS": self.cmd_subs,
@@ -401,6 +402,35 @@ class Broker:
         for topic in escalation.status_topics(report):
             self.publish(topic, report["priority"], report, note=note)
 
+    def cmd_advisory(self, session, line):
+        """ADVISORY <barangay> <URGENT/NORMAL> <text>: a captain, tanod or the
+        city desk posts an announcement on brgy.<barangay>.advisory, which
+        residents of that barangay follow. Replies POSTED <advisory_id>."""
+        parts = line.split(" ", 3)
+        if len(parts) != 4 or not parts[3].strip():
+            raise CommandError("usage: ADVISORY <barangay> <URGENT/NORMAL> <text>")
+        if session.role not in ("responder", "desk"):
+            raise CommandError("only responders and the desk can post an ADVISORY")
+        _, barangay, priority, text = parts
+        barangay = topic_matcher.normalize(barangay)
+        if barangay not in config.BARANGAYS:
+            raise CommandError(f"{barangay[:40]} is not a barangay of "
+                               f"{config.DISTRICT_NAME}, {config.CITY_NAME}")
+        priority = priority.upper()
+        if priority not in ("URGENT", "NORMAL"):
+            raise CommandError("priority must be URGENT or NORMAL")
+        advisory_id = uuid.uuid4().hex[:8]
+        topic = topic_matcher.advisory_topic(barangay)
+        body = json.dumps({
+            "advisory_id": advisory_id, "topic": topic, "barangay": barangay,
+            "priority": priority, "description": text.strip(),
+            # Who posted it, so residents can tell an official notice from a prank.
+            "from": session.client_id, "from_role": session.role,
+        }, ensure_ascii=False, separators=(",", ":"))
+        session.send(f"POSTED {advisory_id}")
+        log.info("advisory %s for %s from %s (%s)", advisory_id, barangay, session.client_id, priority)
+        self._publish_body(topic, priority, body, report_id=None)
+
     def cmd_subs(self, session, line):
         """SUBS -> SUBS <pattern> <pattern> ... (just "SUBS" when there are none).
         Lets a client that reconnects see the subscriptions the broker kept."""
@@ -474,10 +504,14 @@ class Broker:
     def publish(self, topic, priority, report, **extra):
         """Store one message for every subscriber of topic (online or not), then
         send it right away to those who are connected. Returns the msg_id."""
+        return self._publish_body(topic, priority, self.message_body(report, **extra),
+                                  report_id=report["report_id"])
+
+    def _publish_body(self, topic, priority, body, report_id):
+        """publish() for any JSON body (a report or an advisory)."""
         msg_id = uuid.uuid4().hex[:12]
-        body = self.message_body(report, **extra)
         recipients = store.subscribers_for(topic)
-        store.save_message(msg_id, report["report_id"], topic, priority, body,
+        store.save_message(msg_id, report_id, topic, priority, body,
                            recipients=recipients)
         line = self.msg_line({"msg_id": msg_id, "topic": topic,
                               "priority": priority, "body": body})
@@ -511,10 +545,12 @@ class Broker:
         """Send a MSG line to one client if connected, recording the attempt."""
         with self._online_lock:
             session = self._online.get(client_id)
-        if session is None or not session.send(line):
+        if session is None:
             return False
+        # Count the attempt before sending: a fast client's ACK can otherwise
+        # arrive first, and the attempt would never be recorded.
         store.mark_sent(msg_id, client_id)
-        return True
+        return session.send(line)
 
     def online_clients(self):
         with self._online_lock:
