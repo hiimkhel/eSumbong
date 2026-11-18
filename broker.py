@@ -128,6 +128,8 @@ class Broker:
         self._stop = threading.Event()
         self._server = None
         self._threads = []
+        self._client_threads = set()    # live per-client threads, joined on stop()
+        self._client_threads_lock = threading.Lock()
         self.handlers = {
             "HELLO": self.cmd_hello,
             "SUB": self.cmd_sub,
@@ -180,6 +182,12 @@ class Broker:
             s.close()
         for t in self._threads:
             t.join(timeout=2)
+        # Let client threads finish the command they are in (e.g. a fan-out)
+        # before the database closes under them.
+        with self._client_threads_lock:
+            client_threads = list(self._client_threads)
+        for t in client_threads:
+            t.join(timeout=2)
         store.close_db()
         log.info("stopped")
 
@@ -204,8 +212,11 @@ class Broker:
             sock.settimeout(None)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             session = Session(sock, addr)
-            threading.Thread(target=self._client_loop, args=(session,),
-                             name=f"client-{addr[1]}", daemon=True).start()
+            t = threading.Thread(target=self._client_loop, args=(session,),
+                                 name=f"client-{addr[1]}", daemon=True)
+            with self._client_threads_lock:
+                self._client_threads.add(t)
+            t.start()
 
     # ------------------------------------------------------------ per client
 
@@ -230,6 +241,8 @@ class Broker:
             pass  # connection reset: client crashed or network dropped
         finally:
             self._drop(session)
+            with self._client_threads_lock:
+                self._client_threads.discard(threading.current_thread())
 
     def _drop(self, session):
         session.close()
