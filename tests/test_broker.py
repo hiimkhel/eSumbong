@@ -78,7 +78,7 @@ class BrokerTestCase(unittest.TestCase):
     broker_kwargs = {}
 
     def setUp(self):
-        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", **self.broker_kwargs)
+        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", require_auth=False, **self.broker_kwargs)
         _, self.port = self.broker.start()
         self.clients = []
 

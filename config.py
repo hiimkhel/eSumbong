@@ -13,6 +13,14 @@ CATEGORIES = ("noise", "drinking", "fight", "suspicious", "animals", "fire", "fl
 URGENT_CATEGORIES = ("fire", "fight", "flood")
 ROLES = ("resident", "responder", "desk")
 
+# Sign-in (auth.py). Residents use an ID only. Responders sign in with an ID and
+# a PIN, the single city desk with a password only; accounts are made with users.py.
+DESK_ID = "city"
+MIN_PIN_LENGTH = 4
+MIN_DESK_PASSWORD_LENGTH = 8
+MAX_FAILED_LOGINS = 5   # refused sign-ins for one ID before it is locked
+LOCKOUT_SECONDS = 300   # how long the lock lasts
+
 # Scope: the 42 barangays of Jaro district, Iloilo City. Topic level -> name.
 # Source: https://en.wikipedia.org/wiki/Jaro,_Iloilo_City
 CITY = "iloilo"

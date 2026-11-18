@@ -42,6 +42,8 @@ Who may subscribe to what (scope: the barangays of Jaro, config.BARANGAYS):
     Residents follow their own reports through report.<id>.status, which
     the broker adds itself when they REPORT; they cannot SUB to it, so no
     one can read another resident's reports or learn who filed them.
+  A responder account tied to a barangay (users.py --barangay) may only
+  subscribe to, update and post advisories for that barangay.
   Saved subscriptions that break these rules are dropped on HELLO.
 
 Like store.py, this module never touches sockets: it decides and records,
@@ -88,12 +90,13 @@ def clean_note(note):
     return (note or "").strip()[:MAX_NOTE]
 
 
-def apply_status(report_id, status, responder_id, role, note):
+def apply_status(report_id, status, responder_id, role, note, barangay=None):
     """Check and save one status update; return the updated report.
 
     Raises StatusError if the status is not RESPONDING/RESOLVED, the report
     does not exist, the report cannot move to that status, or a tanod tries
-    to resolve a report that was escalated to the city.
+    to resolve a report that was escalated to the city. barangay is the one a
+    responder's account is tied to (None: any); reports elsewhere are refused.
     """
     if status not in UPDATE_STATUSES:
         raise StatusError("status must be RESPONDING or RESOLVED")
@@ -101,6 +104,8 @@ def apply_status(report_id, status, responder_id, role, note):
         report = store.get_report(report_id)
         if report is None:
             raise StatusError(f"unknown report {report_id[:16]}")
+        if barangay and report["barangay"] != barangay:
+            raise StatusError(f"report {report_id} is not in your barangay")
         if status not in ALLOWED_MOVES[report["status"]]:
             raise StatusError(f"report {report_id} is already {report['status']}")
         if status == "RESOLVED" and report["escalated"] and role != "desk":
@@ -158,9 +163,10 @@ def _barangay_ok(level):
     return level in (topic_matcher.SINGLE, topic_matcher.MULTI) or level in config.BARANGAYS
 
 
-def subscription_error(role, pattern):
+def subscription_error(role, pattern, barangay=None):
     """Why `role` may not subscribe to `pattern`, or None if it may.
-    `pattern` is already a valid, normalized pattern."""
+    `pattern` is already a valid, normalized pattern. barangay: the one a
+    responder's account is tied to (None: all of Jaro)."""
     levels = topic_matcher.split(pattern)
     if role == "desk":
         if levels[0] != "city":
@@ -173,6 +179,9 @@ def subscription_error(role, pattern):
             return "responders can only subscribe to brgy.<barangay>... topics"
         if len(levels) > 1 and not _barangay_ok(levels[1]):
             return f"{levels[1]} is not a barangay of {config.DISTRICT_NAME}"
+        if barangay and (len(levels) < 2 or levels[1] != barangay):
+            return (f"your account is for {config.BARANGAYS.get(barangay, barangay)}; "
+                    f"subscribe to brgy.{barangay}.# or topics under it")
         return None
     if role == "resident":
         if len(levels) != 3 or levels[0] != "brgy" or levels[2] != "advisory" or levels[1] not in config.BARANGAYS:
@@ -181,14 +190,14 @@ def subscription_error(role, pattern):
     return f"unknown role {role}"
 
 
-def may_keep(role, pattern):
+def may_keep(role, pattern, barangay=None):
     """Whether a saved subscription survives HELLO in this role: anything the
     role could SUB to, plus report.<id>.status, which only the broker adds
     (for the resident who filed the report)."""
     parsed = topic_matcher.parse_topic(pattern)
     if parsed is not None and parsed["kind"] == "status":
         return True
-    return subscription_error(role, pattern) is None
+    return subscription_error(role, pattern, barangay) is None
 
 
 # ---------------------------------------------------------------- escalation

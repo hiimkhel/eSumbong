@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "../components/Toast.jsx";
 import { setBarangays } from "../lib/format.js";
@@ -15,11 +15,28 @@ beforeEach(() => {
   setBarangays(CONFIG.barangays); // App.jsx does this from /api/config
 });
 
-async function signIn(id = "tanod-a", role = "responder") {
-  render(<ToastProvider><Responder /></ToastProvider>);
-  if (role === "desk") await user.click(screen.getByRole("radio", { name: /city desk/i }));
-  await user.type(screen.getByRole("textbox"), id);
+const PIN = "1234";
+const DESK_PASSWORD = "city-pass-1";
+
+function renderPage() {
+  return render(<ToastProvider><Responder /></ToastProvider>);
+}
+
+// Responders type an ID and PIN; the desk only its password.
+async function fillSignIn(id, role, secret) {
+  if (role === "desk") {
+    await user.click(screen.getByRole("radio", { name: /city desk/i }));
+    await user.type(screen.getByLabelText(/Desk password/), secret ?? DESK_PASSWORD);
+  } else {
+    await user.type(screen.getByRole("textbox"), id);
+    await user.type(screen.getByLabelText(/^PIN/), secret ?? PIN);
+  }
   await user.click(screen.getByRole("button", { name: /continue/i }));
+}
+
+async function signIn(id = "tanod-a", role = "responder") {
+  renderPage();
+  await fillSignIn(id, role);
   await screen.findByRole("heading", { name: "Incoming reports" });
   await waitFor(() => expect(gw.sent).toEqual(["SUBS", "HISTORY"]));
 }
@@ -38,18 +55,57 @@ const card = (id) => screen.getByText(`#${id}`).closest("li");
 const stat = (label) => screen.getByText(label, { selector: ".stat-label" }).parentElement.querySelector(".stat-value").textContent;
 
 describe("Responder sign-in", () => {
-  it("signs in as responder or desk", async () => {
-    await signIn("city", "desk");
-    expect(gw.connects).toEqual([{ client_id: "city", role: "desk" }]);
+  it("a responder signs in with an ID and PIN", async () => {
+    await signIn("tanod-a");
+    expect(gw.connects).toEqual([{ client_id: "tanod-a", role: "responder", secret: PIN }]);
+  });
+
+  it("the city desk signs in with a password only", async () => {
+    renderPage();
+    await user.click(screen.getByRole("radio", { name: /city desk/i }));
+    expect(screen.queryByRole("textbox")).toBeNull(); // no ID field
+    await user.type(screen.getByLabelText(/Desk password/), DESK_PASSWORD);
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await screen.findByRole("heading", { name: "Incoming reports" });
+    expect(gw.connects).toEqual([{ client_id: "city", role: "desk", secret: DESK_PASSWORD }]);
     expect(screen.getByText("City desk", { selector: ".eyebrow" })).toBeInTheDocument();
     expect(screen.getByText("No coverage yet")).toBeInTheDocument();
   });
 
-  it("signs the tab back in with its saved role", async () => {
-    sessionStorage.setItem("esumbong.signin.responder", JSON.stringify({ id: "city", role: "desk" }));
-    render(<ToastProvider><Responder /></ToastProvider>);
-    await screen.findByRole("heading", { name: "Incoming reports" });
-    expect(gw.connects).toEqual([{ client_id: "city", role: "desk" }]);
+  it("requires the PIN before connecting", async () => {
+    renderPage();
+    await user.type(screen.getByRole("textbox"), "tanod-a");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(screen.getByText("Enter your PIN.")).toBeInTheDocument();
+    expect(gw.connects).toEqual([]);
+  });
+
+  it("shows a refused sign-in on the form and clears the PIN", async () => {
+    gw = installFakeGateway({ accounts: { "tanod-a": PIN, city: DESK_PASSWORD } });
+    renderPage();
+    await fillSignIn("tanod-a", "responder", "9999");
+    expect(await screen.findByText(/Couldn't sign in: sign-in failed: wrong ID, PIN or password/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^PIN/)).toHaveValue("");
+    expect(screen.queryByRole("heading", { name: "Incoming reports" })).toBeNull();
+
+    await user.type(screen.getByLabelText(/^PIN/), PIN);
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(await screen.findByRole("heading", { name: "Incoming reports" })).toBeInTheDocument();
+  });
+
+  it("never stores the PIN and asks for it again after a reload", async () => {
+    await signIn("tanod-a");
+    const stored = JSON.stringify({ ...sessionStorage }) + JSON.stringify({ ...localStorage });
+    expect(stored).not.toContain(PIN);
+    expect(sessionStorage.getItem("esumbong.signin.responder")).toBeNull();
+    // The protocol log shows HELLO without the PIN.
+    expect(screen.getByText(/HELLO tanod-a responder ••••/)).toBeInTheDocument();
+
+    cleanup();
+    renderPage(); // "reload": the ID is remembered, the PIN is not
+    expect(screen.getByRole("textbox")).toHaveValue("tanod-a");
+    expect(screen.getByLabelText(/^PIN/)).toHaveValue("");
+    expect(gw.connects).toHaveLength(1); // no automatic sign-in
   });
 });
 
@@ -68,6 +124,14 @@ describe("Coverage (subscriptions)", () => {
     await user.click(screen.getByRole("button", { name: /all of jaro/i }));
     await waitFor(() => expect(gw.lastSent("SUB")).toBe("SUB brgy.#"));
     expect(screen.getByRole("button", { name: /all of jaro/i })).toBeDisabled();
+  });
+
+  it("a barangay account's refused SUB explains why", async () => {
+    await signIn();
+    await user.click(screen.getByRole("button", { name: /all of jaro/i }));
+    gw.emit("ERR your account is for San Roque; subscribe to brgy.san-roque.# or topics under it");
+    expect(await screen.findByText("Broker error: your account is for San Roque; subscribe to brgy.san-roque.# or topics under it")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Subscriptions" })).toBeNull();
   });
 
   it("the desk's preset is the city escalation topic", async () => {

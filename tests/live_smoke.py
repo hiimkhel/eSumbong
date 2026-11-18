@@ -3,35 +3,46 @@ through the same HTTP API the React app uses. Not part of `unittest discover`
 (the name does not start with test_), because it needs a live server and it
 writes real reports into that server's database.
 
-    python tests/live_smoke.py                              # http://127.0.0.1:8080
-    python tests/live_smoke.py --url https://sumbong.example.org
-    python tests/live_smoke.py --full                       # also URGENT fire + advisory
+It signs in as a real responder account, so make a dedicated one first, on the
+server, tied to the test barangay (once):
+    python users.py add smoke-tanod --barangay san-roque
+
+Then, from any machine that can reach the server:
+    python tests/live_smoke.py --url <URL>                 # asks for the PIN
+    python tests/live_smoke.py --url <URL> --full          # also asks for the desk password
+PINs are asked at a hidden prompt, or read from SMOKE_TANOD_PIN and
+SMOKE_DESK_PASSWORD (for CI), never from the command line.
 
 What it checks (each step prints PASS/FAIL; exit code 1 if any step fails):
    1. the web app is served (index.html) and /api/config answers
-   2. resident, responder and desk can connect (unique IDs per run)
-   3. the gateway refuses commands a browser may not send (HELLO)
-   4. role rules: a resident may not SUB to incident topics (ERR)
-   5. a NORMAL report reaches only the subscribed responder, with the reporter
-   6. an anonymous report hides the reporter
-   7. RESPONDING and RESOLVED reach the resident on report.<id>.status
-   8. a resident can WITHDRAW a report nobody has responded to
+   2. sign-in: wrong PIN, missing PIN and a false desk claim are refused (401)
+   3. a resident and the responder account sign in
+   4. the gateway refuses commands a browser may not send (HELLO)
+   5. role rules: a resident may not SUB to incident topics (ERR)
+   6. a NORMAL report reaches the subscribed responder, with the reporter
+   7. an anonymous report hides the reporter
+   8. RESPONDING and RESOLVED reach the resident on report.<id>.status
    9. HISTORY returns this run's reports
-  --full adds:
-  10. an URGENT fire report reaches the city desk at once, and the desk resolves it
-  11. an advisory reaches a resident following the barangay
+  10. a resident can WITHDRAW a report nobody has responded to
+  11. a report on a purok the responder does not cover never reaches it
+  --full adds (needs the desk password):
+  12. an URGENT fire report reaches the city desk at once; only the desk resolves it
+  13. an advisory reaches a resident following the barangay
 
-Safety on a shared server: every ID and purok carries this run's tag, every
-description starts with "[SMOKE TEST]", every report is left RESOLVED or
-WITHDRAWN, and subscriptions are removed at the end. Anyone subscribed to the
-whole barangay (e.g. brgy.<barangay>.#) will still see the test reports, and
---full sends an URGENT report to the city desk and an advisory to residents
-following the barangay, so tell the team before running it on production.
-Standard library only.
+Safety on a shared server: the resident ID and purok carry this run's tag,
+every description starts with "[SMOKE TEST]", every report is left RESOLVED or
+WITHDRAWN, and only subscriptions this run added are removed at the end.
+Anyone subscribed to the whole barangay (e.g. brgy.<barangay>.#) still sees
+the test reports. --full signs in as the city desk, which DISCONNECTS an open
+desk session (one session per ID), sends it an URGENT report and posts an
+advisory to the barangay's residents: tell the team before running it on
+production. Standard library only.
 """
 
 import argparse
+import getpass
 import json
+import os
 import queue
 import sys
 import threading
@@ -50,12 +61,15 @@ class Failure(Exception):
 class Session:
     """One browser-like session: POST /api/connect, read /api/events, ACK every MSG."""
 
-    def __init__(self, base, client_id, role):
+    def __init__(self, base, client_id, role, secret=None):
         self.base = base
         self.client_id = client_id
         self.role = role
         self.lines = queue.Queue()
-        self.session = post(base, "/api/connect", {"client_id": client_id, "role": role})["session"]
+        body = {"client_id": client_id, "role": role}
+        if secret:
+            body["secret"] = secret
+        self.session = post(base, "/api/connect", body)["session"]
         self._stream = urllib.request.urlopen(f"{base}/api/events?session={self.session}", timeout=60)
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -107,6 +121,10 @@ class Session:
         line = self.wait_for(what, lambda l: (p := parse(l)) is not None and test(p[0], p[2]))
         return parse(line)
 
+    def subs(self):
+        self.send("SUBS")
+        return self.wait_for("SUBS reply", lambda l: l.startswith("SUBS")).split()[1:]
+
     def close(self):
         try:
             post(self.base, "/api/disconnect", {"session": self.session})
@@ -132,11 +150,18 @@ def get(base, path):
         return res.status, res.headers.get("Content-Type", ""), res.read()
 
 
+def secret_from(env, prompt):
+    return os.environ.get(env) or getpass.getpass(prompt)
+
+
 def main():
     parser = argparse.ArgumentParser(description="eSumbong live smoke test")
     parser.add_argument("--url", default="http://127.0.0.1:8080", help="gateway base URL")
     parser.add_argument("--barangay", default="san-roque", help="barangay used for test reports")
-    parser.add_argument("--full", action="store_true", help="also test URGENT escalation and advisories")
+    parser.add_argument("--tanod", default="smoke-tanod",
+                        help="responder account to sign in as (make it with users.py); PIN from SMOKE_TANOD_PIN or a prompt")
+    parser.add_argument("--full", action="store_true",
+                        help="also test URGENT escalation and advisories (signs in as the city desk)")
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
@@ -144,9 +169,12 @@ def main():
     brgy = args.barangay
     purok = f"smoke-{tag}"
     prefix = "[SMOKE TEST]"
+    pin = secret_from("SMOKE_TANOD_PIN", f"PIN for {args.tanod}: ")
+    desk_password = secret_from("SMOKE_DESK_PASSWORD", "City desk password: ") if args.full else None
     results = []
     sessions = []
-    cleanup = []  # lines to send at the end: (session, line)
+    cleanup = []  # (session, line) sent at the end
+    ctx = {}
 
     def step(name, fn):
         start = time.monotonic()
@@ -160,38 +188,52 @@ def main():
         print(f"  PASS  {name}  ({time.monotonic() - start:.1f}s)")
         return True
 
+    def subscribe(session, pattern):
+        """SUB, and UNSUB at the end only if this run added it."""
+        if pattern not in session.subs():
+            session.send(f"SUB {pattern}")
+            cleanup.append((session, f"UNSUB {pattern}"))
+        if pattern not in session.subs():
+            raise Failure(f"{session.client_id} could not subscribe to {pattern}")
+
     print(f"eSumbong live smoke test against {base}  (run tag {tag})\n")
-    ctx = {}
 
     def web_app():
         status, ctype, body = get(base, "/")
         if status != 200 or "text/html" not in ctype or b"<div id=\"root\"" not in body:
             raise Failure("GET / did not return the React index.html (run `npm run build` in frontend/?)")
-        status, _, body = get(base, "/api/config")
+        _, _, body = get(base, "/api/config")
         cfg = json.loads(body)
         if brgy not in {b["id"] for b in cfg["barangays"]}:
             raise Failure(f"{brgy} is not in /api/config barangays")
-        ctx["cfg"] = cfg
+        ctx["desk_id"] = cfg.get("desk_id", "city")
+
+    def sign_in_refused():
+        wrong = "0" if pin != "0" * len(pin) else "1"
+        cases = [({"client_id": args.tanod, "role": "responder", "secret": wrong * max(4, len(pin))}, "wrong PIN"),
+                 ({"client_id": args.tanod, "role": "responder"}, "missing PIN"),
+                 ({"client_id": args.tanod, "role": "desk", "secret": pin}, "responder PIN used as desk"),
+                 ({"client_id": f"nobody-{tag}", "role": "responder", "secret": pin}, "unknown account")]
+        for body, what in cases:
+            res = post(base, "/api/connect", body, expect_ok=False)
+            if res.get("status") != 401:
+                if "session" in res:
+                    post(base, "/api/disconnect", {"session": res["session"]})
+                raise Failure(f"{what}: expected 401, got {res}")
 
     def connect_all():
-        for name, cid, role in [("resident", f"smoke-res-{tag}", "resident"),
-                                ("tanod", f"smoke-tanod-{tag}", "responder"),
-                                ("other", f"smoke-other-{tag}", "responder"),
-                                ("desk", f"smoke-desk-{tag}", "desk")]:
-            s = Session(base, cid, role)
-            sessions.append(s)
-            ctx[name] = s
-        tanod, other, desk = ctx["tanod"], ctx["other"], ctx["desk"]
-        tanod.send(f"SUB brgy.{brgy}.{purok}.#")
-        other.send(f"SUB brgy.{brgy}.{purok}-elsewhere.#")  # must NOT get this run's reports
-        cleanup.append((tanod, f"UNSUB brgy.{brgy}.{purok}.#"))
-        cleanup.append((other, f"UNSUB brgy.{brgy}.{purok}-elsewhere.#"))
+        ctx["resident"] = Session(base, f"smoke-res-{tag}", "resident")
+        sessions.append(ctx["resident"])
+        try:
+            ctx["tanod"] = Session(base, args.tanod, "responder", pin)
+        except Failure as exc:
+            raise Failure(f"{exc} (does the account exist? python users.py add {args.tanod} --barangay {brgy})") from None
+        sessions.append(ctx["tanod"])
+        subscribe(ctx["tanod"], f"brgy.{brgy}.{purok}.#")
         if args.full:
-            desk.send(f"SUB city.iloilo.escalated.{brgy}")
-            cleanup.append((desk, f"UNSUB city.iloilo.escalated.{brgy}"))
-        for s in (tanod, other, desk):
-            s.send("SUBS")
-            s.wait_for("SUBS reply", lambda l: l.startswith("SUBS"))
+            ctx["desk"] = Session(base, ctx["desk_id"], "desk", desk_password)
+            sessions.append(ctx["desk"])
+            subscribe(ctx["desk"], f"city.iloilo.escalated.{brgy}")
 
     def gateway_filter():
         res = post(base, "/api/send", {"session": ctx["resident"].session, "line": "HELLO someone desk"}, expect_ok=False)
@@ -202,22 +244,23 @@ def main():
         ctx["resident"].send(f"SUB brgy.{brgy}.#")
         ctx["resident"].wait_for("ERR for a resident SUB to incidents", lambda l: l.startswith("ERR "))
 
+    def file_report(category, anon, text):
+        res = ctx["resident"]
+        res.send(f"REPORT brgy.{brgy}.{purok}.{category} {anon} {prefix} {text}, please ignore")
+        return res.wait_for("REPORTED", lambda l: l.startswith("REPORTED ")).split()[1]
+
     def normal_report():
-        res, tanod = ctx["resident"], ctx["tanod"]
-        res.send(f"REPORT brgy.{brgy}.{purok}.noise N {prefix} loud karaoke, please ignore")
-        rid = res.wait_for("REPORTED", lambda l: l.startswith("REPORTED ")).split()[1]
-        topic, priority, body = tanod.wait_msg("the report", lambda t, b: b.get("report_id") == rid)
+        rid = file_report("noise", "N", "loud karaoke")
+        topic, priority, body = ctx["tanod"].wait_msg("the report", lambda t, b: b.get("report_id") == rid)
         if topic != f"brgy.{brgy}.{purok}.noise" or priority != "NORMAL":
             raise Failure(f"wrong topic/priority: {topic} {priority}")
-        if body.get("reporter") != res.client_id:
-            raise Failure(f"reporter should be {res.client_id}, got {body.get('reporter')}")
+        if body.get("reporter") != ctx["resident"].client_id:
+            raise Failure(f"reporter should be {ctx['resident'].client_id}, got {body.get('reporter')}")
         ctx["rid"] = rid
 
     def anonymous_report():
-        res, tanod = ctx["resident"], ctx["tanod"]
-        res.send(f"REPORT brgy.{brgy}.{purok}.drinking Y {prefix} anonymous check, please ignore")
-        rid = res.wait_for("REPORTED", lambda l: l.startswith("REPORTED ")).split()[1]
-        _, _, body = tanod.wait_msg("the anonymous report", lambda t, b: b.get("report_id") == rid)
+        rid = file_report("drinking", "Y", "anonymous check")
+        _, _, body = ctx["tanod"].wait_msg("the anonymous report", lambda t, b: b.get("report_id") == rid)
         if "reporter" in body:
             raise Failure(f"anonymous report revealed the reporter: {body['reporter']}")
         ctx["anon_rid"] = rid
@@ -232,14 +275,6 @@ def main():
         tanod.send(f"STATUS {ctx['anon_rid']} RESOLVED {prefix} cleanup")
         tanod.wait_for("UPDATED for cleanup", lambda l: l.startswith(f"UPDATED {ctx['anon_rid']}"))
 
-    def withdraw():
-        res = ctx["resident"]
-        res.send(f"REPORT brgy.{brgy}.{purok}.road N {prefix} withdraw check, please ignore")
-        rid = res.wait_for("REPORTED", lambda l: l.startswith("REPORTED ")).split()[1]
-        res.send(f"WITHDRAW {rid} smoke test")
-        res.wait_for("UPDATED WITHDRAWN", lambda l: l == f"UPDATED {rid} WITHDRAWN")
-        ctx["tanod"].wait_msg("the withdrawal", lambda t, b: b.get("report_id") == rid and b.get("status") == "WITHDRAWN")
-
     def history():
         tanod = ctx["tanod"]
         tanod.send("HISTORY")
@@ -249,21 +284,32 @@ def main():
         if ctx["rid"] not in seen:
             raise Failure(f"HISTORY did not include report {ctx['rid']}")
 
-    def not_leaked():
-        # Everything above has already been delivered; give stragglers 3 seconds.
-        other, deadline = ctx["other"], time.monotonic() + 3
+    def withdraw():
+        res = ctx["resident"]
+        rid = file_report("road", "N", "withdraw check")
+        res.send(f"WITHDRAW {rid} smoke test")
+        res.wait_for("UPDATED WITHDRAWN", lambda l: l == f"UPDATED {rid} WITHDRAWN")
+        ctx["tanod"].wait_msg("the withdrawal", lambda t, b: b.get("report_id") == rid and b.get("status") == "WITHDRAWN")
+
+    def isolation():
+        # A report one purok over: the responder covers only this run's purok.
+        res, other = ctx["resident"], f"{purok}-x"
+        res.send(f"REPORT brgy.{brgy}.{other}.noise N {prefix} isolation check, please ignore")
+        rid = res.wait_for("REPORTED", lambda l: l.startswith("REPORTED ")).split()[1]
+        res.send(f"WITHDRAW {rid} smoke test")  # so it never escalates to the desk
+        res.wait_for("UPDATED WITHDRAWN", lambda l: l == f"UPDATED {rid} WITHDRAWN")
+        deadline = time.monotonic() + 3
         while (remaining := deadline - time.monotonic()) > 0:
             try:
-                line = other.lines.get(timeout=remaining)
+                line = ctx["tanod"].lines.get(timeout=remaining)
             except queue.Empty:
                 break
-            if line and line.startswith("MSG ") and f" brgy.{brgy}.{purok}." in line:
-                raise Failure(f"a responder subscribed elsewhere received: {line[:120]}")
+            if line and line.startswith("MSG ") and rid in line:
+                raise Failure(f"the responder received a report outside its subscription: {line[:120]}")
 
     def urgent_escalation():
-        res, desk = ctx["resident"], ctx["desk"]
-        res.send(f"REPORT brgy.{brgy}.{purok}.fire N {prefix} urgent escalation check, please ignore")
-        rid = res.wait_for("REPORTED", lambda l: l.startswith("REPORTED ")).split()[1]
+        desk = ctx["desk"]
+        rid = file_report("fire", "N", "urgent escalation check")
         topic, priority, body = desk.wait_msg("the escalated fire report", lambda t, b: b.get("report_id") == rid)
         if topic != f"city.iloilo.escalated.{brgy}" or priority != "URGENT" or not body.get("escalated"):
             raise Failure(f"expected URGENT escalation on city.iloilo.escalated.{brgy}, got {topic} {priority}")
@@ -274,27 +320,24 @@ def main():
 
     def advisory():
         res, tanod = ctx["resident"], ctx["tanod"]
-        res.send(f"SUB brgy.{brgy}.advisory")
-        cleanup.append((res, f"UNSUB brgy.{brgy}.advisory"))
-        res.send("SUBS")
-        res.wait_for("SUBS reply", lambda l: l.startswith("SUBS") and f"brgy.{brgy}.advisory" in l)
+        subscribe(res, f"brgy.{brgy}.advisory")
         tanod.send(f"ADVISORY {brgy} NORMAL {prefix} test advisory, please ignore")
         aid = tanod.wait_for("POSTED", lambda l: l.startswith("POSTED ")).split()[1]
         res.wait_msg("the advisory", lambda t, b: b.get("advisory_id") == aid)
 
     try:
         ok = step("web app and /api/config are served", web_app)
-        ok = ok and step("resident, responders and desk connect", connect_all)
+        ok = ok and step("wrong PIN, missing PIN and false desk claim are refused", sign_in_refused)
+        ok = ok and step("resident and responder sign in", connect_all)
         if ok:
             step("gateway refuses HELLO from a browser", gateway_filter)
             step("resident may not subscribe to incident topics", role_rules)
             if step("NORMAL report reaches the subscribed responder", normal_report):
-                step("anonymous report hides the reporter", anonymous_report)
-                if "anon_rid" in ctx:
+                if step("anonymous report hides the reporter", anonymous_report):
                     step("RESPONDING and RESOLVED reach the resident", status_updates)
                 step("HISTORY includes this run's report", history)
             step("resident withdraws an unanswered report", withdraw)
-            step("responder on another purok receives none of it", not_leaked)
+            step("a purok the responder does not cover never reaches it", isolation)
             if args.full:
                 step("URGENT fire goes to the city desk; only the desk resolves", urgent_escalation)
                 step("advisory reaches a following resident", advisory)
@@ -310,8 +353,7 @@ def main():
             except Exception:  # noqa: BLE001
                 pass
 
-    passed = sum(results)
-    print(f"\n{passed}/{len(results)} steps passed")
+    print(f"\n{sum(results)}/{len(results)} steps passed")
     return 0 if results and all(results) else 1
 
 

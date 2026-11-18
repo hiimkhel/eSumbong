@@ -52,7 +52,12 @@ python broker.py
 python frontend/gateway.py
 ```
 
-Open http://127.0.0.1:8080. Use `--port` to change the web port and
+Open http://127.0.0.1:8080. Residents sign in with an ID only; responders need an
+account and PIN, and the city desk its password (create them with `python users.py`,
+see the main README). PINs are sent once to the gateway, which passes them to the
+broker in HELLO; the browser never stores them, so responders enter the PIN again
+after a reload. Serve the gateway over HTTPS (e.g. behind a reverse proxy) anywhere
+but your own machine, or PINs cross the network in plain text. Use `--port` to change the web port and
 `--broker-host` / `--broker-port` to point at a broker other than the one in `config.py`.
 
 ## Developing

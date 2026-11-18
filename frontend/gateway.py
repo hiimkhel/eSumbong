@@ -3,8 +3,10 @@ Purpose: Serve the web frontend (the React build in frontend/dist) and bridge
 browser sessions to the Sumbong broker.
 
 Browsers cannot open raw TCP sockets, so each browser session gets its own TCP
-connection to the broker through this gateway. The gateway forwards the exact
-one-line commands from docs/PROTOCOL.md and streams broker lines back to the
+connection to the broker through this gateway. It sends HELLO itself (with a
+responder's PIN or the desk password) and confirms the sign-in with a PING
+before answering /api/connect, so a wrong PIN is reported at sign-in. After
+that it forwards the exact one-line commands from docs/PROTOCOL.md and streams broker lines back to the
 browser with Server-Sent Events. It does not parse or change the protocol beyond
 answering broker PINGs with PONG and rejecting commands a browser should not send.
 
@@ -12,7 +14,7 @@ Python 3.12 standard library only.
 
 HTTP API (all JSON unless noted):
     GET  /api/config                     shared settings from config.py
-    POST /api/connect    {client_id, role}  -> {session}
+    POST /api/connect    {client_id, role, secret?} -> {session}  (401 if sign-in is refused)
     GET  /api/events?session=ID          text/event-stream of broker lines
     POST /api/send       {session, line}
     POST /api/disconnect {session}
@@ -53,24 +55,54 @@ ALLOWED_COMMANDS = {"SUB", "UNSUB", "SUBS", "HISTORY", "REPORT", "WITHDRAW", "AD
 SSE_KEEPALIVE_SECONDS = 15
 MAX_BODY_BYTES = 16 * 1024
 CLOSED = object()  # sentinel placed on a session queue when the broker link ends
+LOGIN_TIMEOUT = 5  # seconds to wait for the broker to accept HELLO
 
 log = logging.getLogger("gateway")
+
+
+class LoginRefused(Exception):
+    """The broker answered HELLO with ERR (wrong PIN, bad ID, ...)."""
 
 
 class BrokerSession:
     """One browser session: a TCP connection to the broker plus a line queue."""
 
-    def __init__(self, client_id, role, broker_addr):
+    def __init__(self, client_id, role, broker_addr, secret=None):
         self.id = uuid.uuid4().hex
         self.client_id = client_id
         self.role = role
         self.lines = queue.Queue()
         self.closed = threading.Event()
         self._send_lock = threading.Lock()
-        self.sock = socket.create_connection(broker_addr, timeout=5)
+        self._reading = False
+        self.sock = socket.create_connection(broker_addr, timeout=LOGIN_TIMEOUT)
+        self._stream = self.sock.makefile("r", encoding=config.ENCODING, newline="\n")
+        try:
+            self._login(secret)
+        except BaseException:
+            self.close()
+            raise
         self.sock.settimeout(None)
-        self.send(f"HELLO {client_id} {role}")
+        self._reading = True
         threading.Thread(target=self._read_loop, daemon=True, name=f"read-{client_id}").start()
+
+    def _login(self, secret):
+        """HELLO, then PING: PONG means the broker accepted HELLO, ERR that it
+        refused it. Lines in between (catch-up MSGs) are kept for the browser."""
+        hello = f"HELLO {self.client_id} {self.role}"
+        self.send(f"{hello} {secret}" if secret else hello)
+        self.send("PING")
+        for raw in self._stream:
+            line = raw.rstrip("\r\n")
+            if line == "PONG":
+                return
+            if line.startswith("ERR "):
+                raise LoginRefused(line[4:])
+            if line == "PING":
+                self.send("PONG")
+            elif line:
+                self.lines.put(line)
+        raise LoginRefused("the broker closed the connection")
 
     def send(self, line):
         data = (line + "\n").encode(config.ENCODING)
@@ -79,7 +111,7 @@ class BrokerSession:
 
     def _read_loop(self):
         try:
-            with self.sock.makefile("r", encoding=config.ENCODING, newline="\n") as stream:
+            with self._stream as stream:
                 for raw in stream:
                     line = raw.rstrip("\r\n")
                     if not line:
@@ -104,6 +136,13 @@ class BrokerSession:
         except OSError:
             pass
         self.sock.close()
+        if not self._reading:
+            # Only before the read thread starts: once it runs, it closes the
+            # stream itself (closing it from here could block on its lock).
+            try:
+                self._stream.close()
+            except OSError:
+                pass
 
 
 class SessionRegistry:
@@ -145,6 +184,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "urgent_categories": list(config.URGENT_CATEGORIES),
                 "roles": list(config.ROLES),
                 "report_statuses": list(config.REPORT_STATUSES),
+                "desk_id": config.DESK_ID,
                 "city_name": config.CITY_NAME,
                 "district_name": config.DISTRICT_NAME,
                 "barangays": [{"id": k, "name": v} for k, v in config.BARANGAYS.items()],
@@ -180,8 +220,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.BAD_REQUEST, {"error": "client_id must be 1-64 characters with no spaces"})
         if role not in config.ROLES:
             return self._json(HTTPStatus.BAD_REQUEST, {"error": f"role must be one of {', '.join(config.ROLES)}"})
+        secret = body.get("secret") or None
+        if secret is not None and not is_token(secret):
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "PIN or password must be 1-64 characters with no spaces"})
         try:
-            session = BrokerSession(client_id, role, self.server.broker_addr)
+            session = BrokerSession(client_id, role, self.server.broker_addr, secret)
+        except LoginRefused as exc:
+            log.info("sign-in refused for %s (%s)", client_id, role)
+            return self._json(HTTPStatus.UNAUTHORIZED, {"error": str(exc)})
         except OSError as exc:
             host, port = self.server.broker_addr
             return self._json(HTTPStatus.BAD_GATEWAY, {"error": f"cannot reach broker at {host}:{port} ({exc})"})

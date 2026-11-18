@@ -9,6 +9,7 @@ export const CONFIG = {
   urgent_categories: ["fire", "fight", "flood"],
   roles: ["resident", "responder", "desk"],
   report_statuses: ["RECEIVED", "RESPONDING", "RESOLVED", "WITHDRAWN"],
+  desk_id: "city",
   city_name: "Iloilo City",
   district_name: "Jaro",
   barangays: [
@@ -23,7 +24,11 @@ function jsonResponse(status, body) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
-export function installFakeGateway({ connectError = null } = {}) {
+// accounts: { client_id: secret } for responders and the desk, like users.py.
+// When given, a responder/desk connect with a wrong or missing secret gets 401.
+export const LOGIN_FAILED = "sign-in failed: wrong ID, PIN or password";
+
+export function installFakeGateway({ connectError = null, accounts = null } = {}) {
   const gw = {
     sent: [],          // lines POSTed to /api/send
     connects: [],      // bodies POSTed to /api/connect
@@ -60,6 +65,9 @@ export function installFakeGateway({ connectError = null } = {}) {
     if (path === "/api/connect") {
       gw.connects.push(body);
       if (connectError) return jsonResponse(502, { error: connectError });
+      if (accounts && body.role !== "resident" && (!body.secret || accounts[body.client_id] !== body.secret)) {
+        return jsonResponse(401, { error: LOGIN_FAILED });
+      }
       gw.sessionCount += 1;
       return jsonResponse(200, { session: `s${gw.sessionCount}` });
     }

@@ -1,6 +1,7 @@
 """store.py
 Owner: Allanah
-Purpose: SQLite storage for reports, messages, subscriptions, deliveries, and status log; retry thread.
+Purpose: SQLite storage for reports, messages, subscriptions, deliveries, status log
+and responder/desk accounts (users); retry thread.
 
 Schema: docs/DATABASE.md. Only this module runs SQL against sumbong.db.
 
@@ -74,6 +75,14 @@ CREATE TABLE IF NOT EXISTS status_log (
     responder_id TEXT,
     note         TEXT,
     time         REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    client_id   TEXT PRIMARY KEY,
+    role        TEXT NOT NULL CHECK (role IN ('responder', 'desk')),
+    barangay    TEXT,
+    secret_hash TEXT NOT NULL,
+    created_at  REAL NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_client_status ON deliveries (client_id, status);
@@ -252,6 +261,43 @@ def get_message(msg_id):
         row = _db().execute(
             "SELECT * FROM messages WHERE msg_id = ?", (msg_id,)).fetchone()
     return _dict(row)
+
+
+# ---------------------------------------------------------------- users
+
+def save_user(client_id, role, secret_hash, barangay=None, created_at=None):
+    """Create or replace a responder/desk account. secret_hash comes from
+    auth.hash_secret(); plain PINs and passwords are never stored."""
+    with _lock, _db() as conn:
+        conn.execute(
+            "INSERT INTO users (client_id, role, barangay, secret_hash, created_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (client_id) DO UPDATE SET role = excluded.role,"
+            " barangay = excluded.barangay, secret_hash = excluded.secret_hash",
+            (client_id, role, barangay, secret_hash, _now(created_at)),
+        )
+
+
+def get_user(client_id):
+    with _lock:
+        row = _db().execute("SELECT * FROM users WHERE client_id = ?", (client_id,)).fetchone()
+    return _dict(row)
+
+
+def delete_user(client_id):
+    """Returns True if an account was removed."""
+    with _lock, _db() as conn:
+        cur = conn.execute("DELETE FROM users WHERE client_id = ?", (client_id,))
+    return cur.rowcount == 1
+
+
+def list_users():
+    """Every account, without the hashes, desk first then by ID."""
+    with _lock:
+        rows = _db().execute(
+            "SELECT client_id, role, barangay, created_at FROM users"
+            " ORDER BY role = 'responder', client_id").fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------- subscriptions

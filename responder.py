@@ -2,10 +2,11 @@
 Owner: Kelly
 Purpose: Responder CLI for tanods, captain, and city desk; ACK, STATUS, duplicate filtering.
 
-Run (broker first), one terminal per person:
+Run (broker first), one terminal per person. Each asks for the account's PIN,
+or for the desk the desk password (accounts: python users.py, see README):
     python responder.py --id tanod-a --sub brgy.san-roque.purok-3.#
     python responder.py --id captain --sub brgy.san-roque.#
-    python responder.py --id city --role desk --sub city.iloilo.escalated.#
+    python responder.py --role desk --sub city.iloilo.escalated.#
     python responder.py --id tanod-b --sub brgy.san-roque.# --drop-ack 1   (bonus: lost ACK)
 
 Commands:
@@ -18,6 +19,8 @@ Every MSG is ACKed; a message seen before prints "duplicate ... ignored".
 """
 
 import argparse
+import getpass
+import sys
 
 import client
 import config
@@ -44,6 +47,9 @@ def handle(kind, data):
         client.say(f"({data})")
     elif kind == "ERR":
         client.say(f"! {data}")
+        if data.startswith("sign-in failed") or data.endswith("must sign in with their PIN") \
+                or data.endswith("must sign in with the desk password"):
+            client.say("Check the ID and PIN (accounts are made with users.py).")
     elif kind == "CLOSED":
         client.say("Disconnected from the broker. Press Enter to exit.")
 
@@ -67,7 +73,7 @@ def advisory_line(rest):
 
 def main():
     parser = argparse.ArgumentParser(description="eSumbong responder (tanod, captain, city desk)")
-    parser.add_argument("--id", required=True, help="your ID, one word, e.g. tanod-a")
+    parser.add_argument("--id", help=f"your ID, one word, e.g. tanod-a (the desk is always {config.DESK_ID})")
     parser.add_argument("--role", choices=("responder", "desk"), default="responder")
     parser.add_argument("--sub", action="append", default=[], metavar="PATTERN",
                         help="subscribe on start (repeatable), e.g. brgy.san-roque.#")
@@ -76,9 +82,20 @@ def main():
     parser.add_argument("--host", default=config.HOST)
     parser.add_argument("--port", type=int, default=config.PORT)
     args = parser.parse_args()
+    if args.role == "desk":
+        args.id = config.DESK_ID  # one city desk, password only
+    elif not args.id:
+        parser.error("--id is required for responders")
     client.utf8_console()
+    try:
+        secret = getpass.getpass("City desk password: " if args.role == "desk" else f"PIN for {args.id}: ")
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nbye")
+    if not secret or " " in secret:
+        sys.exit("! a PIN or password is one word with no spaces")
 
-    c = client.Client(args.id, args.role, handle, args.host, args.port, drop_acks=args.drop_ack)
+    c = client.Client(args.id, args.role, handle, args.host, args.port, drop_acks=args.drop_ack,
+                      secret=secret)
     for pattern in args.sub:
         c.send(f"SUB {pattern}")
     c.send("SUBS")

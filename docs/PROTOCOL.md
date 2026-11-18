@@ -5,7 +5,7 @@
 
 | Direction | Command | Meaning |
 | --- | --- | --- |
-| Client → Broker | HELLO <client_id> <role> | Identify as resident, responder, or desk |
+| Client → Broker | HELLO <client_id> <role> [<secret>] | Identify as resident, responder, or desk. Responders add their PIN and the desk (client_id `city`) its password; residents send none. Silent on success; a refused sign-in gets `ERR sign-in failed: ...` (or `ERR too many failed sign-ins ...`) about 1 s later and the broker ends the connection |
 | Subscriber → Broker | SUB <pattern> / UNSUB <pattern> | Register or remove a subscription |
 | Resident → Broker | REPORT <topic> <anon:Y/N> <description> | File an incident |
 | Broker → Resident | REPORTED <report_id> | Report stored; resident auto-subscribed to report.<report_id>.status |
@@ -27,6 +27,7 @@
 ## Topics
 
 - Scope: Jaro district, Iloilo City. <barangay> is one of the 42 levels in config.BARANGAYS (e.g. san-roque, mh-del-pilar); REPORT from anywhere else gets ERR. <purok> may be a purok or a landmark (e.g. purok-3, near-jaro-plaza).
+- Sign-in (auth.py): responder and desk accounts live in the `users` table, made with `python users.py`. A responder account tied to a barangay may only SUB to `brgy.<that barangay>...`, send STATUS for that barangay's reports and post ADVISORY there. After 5 refused sign-ins an ID is locked for 5 minutes (config.MAX_FAILED_LOGINS, LOCKOUT_SECONDS).
 - Who may SUB (escalation.py): the desk only city.iloilo.escalated.<barangay|*|#>; responders only brgy.…; residents only brgy.<barangay>.advisory. Residents get report.<report_id>.status added by the broker when they REPORT and cannot SUB to it. Saved subscriptions a role may not hold are dropped on HELLO.
 - Incident topics: brgy.<barangay>.<purok>.<category>
 - Advisory topic: brgy.<barangay>.advisory

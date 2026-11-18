@@ -13,11 +13,13 @@ import { CategoryTile, EmptyState, FieldError, HiddenToggle, StatusBadge, Status
 import { useConnection } from "../hooks/useConnection.js";
 import { useDismissed } from "../hooks/useDismissed.js";
 import { advisorySender, barangayList, barangayName, categoryMeta, clockTime, isClosed, placeFromTopic } from "../lib/format.js";
-import { oneLine, reportCovered } from "../lib/sumbong.js";
+import { loadConfig, oneLine, reportCovered } from "../lib/sumbong.js";
 
+// Responders sign in with an ID and PIN; the one city desk with a password only
+// (accounts are made with users.py; the broker checks them, see auth.py).
 const ROLES = [
-  { value: "responder", label: "Responder", hint: "Tanod or captain", icon: ShieldCheck },
-  { value: "desk", label: "City desk", hint: "Handles escalations", icon: Building2 },
+  { value: "responder", label: "Responder", hint: "Tanod or captain", icon: ShieldCheck, secretLabel: "PIN" },
+  { value: "desk", label: "City desk", hint: "Handles escalations", icon: Building2, secretLabel: "Desk password", fixedId: "city" },
 ];
 
 // What each role may subscribe to (the broker enforces this; see escalation.py).
@@ -66,7 +68,7 @@ export default function Responder() {
   const [advErrors, setAdvErrors] = useState({});
   const [advisories, setAdvisories] = useState([]);
   const postingAdvisory = useRef(null);
-  const autoSignIn = useRef(false);
+  const [deskId, setDeskId] = useState(ROLES[1].fixedId); // config.DESK_ID, from /api/config
   const sentNotes = useRef(new Map()); // report_id -> note sent with STATUS, until UPDATED
 
   const conn = useConnection({
@@ -205,33 +207,27 @@ export default function Responder() {
     return showHidden && hiddenHere ? [...shown, ...hiddenList] : shown;
   }, [visible, filter, showHidden, hiddenHere, hiddenList]);
 
-  const [restoring, setRestoring] = useState(Boolean(conn.saved));
+  useEffect(() => {
+    loadConfig().then((c) => c.desk_id && setDeskId(c.desk_id)).catch(() => { /* keep the default */ });
+  }, []);
 
-  async function connect(id, role) {
+  // A refused sign-in (wrong PIN) throws, so SignIn shows why. There is no
+  // automatic sign-in after a reload: the PIN is never stored, so it is asked again.
+  async function connect(id, role, secret) {
     setReports(new Map());
     seen.current = new Set();
     lastSub.current = null;
+    await conn.connect(id, role, secret);
+    setIdentity({ id, role });
     try {
-      await conn.connect(id, role);
-      setIdentity({ id, role });
       await conn.send("SUBS");     // coverage the broker kept for this ID
       await conn.send("HISTORY");  // reports that coverage already reaches
     } catch (err) {
       toast(err.message, true);
-    } finally {
-      setRestoring(false);
     }
   }
 
-  // Sign this tab back in after a reload or the back button.
-  useEffect(() => {
-    if (autoSignIn.current) return;
-    autoSignIn.current = true;
-    if (conn.saved) connect(conn.saved.id, conn.saved.role);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   if (!conn.online) {
-    if (restoring) return <AppBar active="responder" conn={conn} />;
     return (
       <>
         <AppBar active="responder" conn={conn} />
@@ -240,7 +236,7 @@ export default function Responder() {
           lead="Sign in to receive reports from the barangays you cover and update their status."
           foot="Residents see each status update you send."
           placeholder="e.g. tanod-jaro-1"
-          roles={ROLES}
+          roles={ROLES.map((r) => (r.fixedId ? { ...r, fixedId: deskId } : r))}
           defaultId={conn.lastId?.id}
           defaultRole={conn.lastId?.role || identity.role}
           reason={conn.reason}

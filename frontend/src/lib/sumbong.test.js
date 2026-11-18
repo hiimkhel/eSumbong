@@ -146,6 +146,23 @@ describe("Connection", () => {
     expect(onState).toHaveBeenLastCalledWith("online");
   });
 
+  it("sends the PIN only when there is one", async () => {
+    const { gw, conn } = setup();
+    await conn.connect("tanod-a", "responder", "1234");
+    await conn.connect("juan", "resident");
+    expect(gw.connects).toEqual([
+      { client_id: "tanod-a", role: "responder", secret: "1234" },
+      { client_id: "juan", role: "resident" },
+    ]);
+  });
+
+  it("surfaces a refused sign-in", async () => {
+    installFakeGateway({ accounts: { "tanod-a": "1234" } });
+    const conn = new Connection({ onLine: () => {} });
+    await expect(conn.connect("tanod-a", "responder", "0000")).rejects.toThrow("sign-in failed");
+    expect(conn.connected).toBe(false);
+  });
+
   it("surfaces the gateway's error message when connect fails", async () => {
     installFakeGateway({ connectError: "cannot reach broker at 127.0.0.1:5050" });
     const conn = new Connection({ onLine: () => {} });

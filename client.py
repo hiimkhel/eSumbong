@@ -2,7 +2,8 @@
 Owner: Kelly
 Purpose: Shared line client for resident.py and responder.py.
 
-Connects to the broker, sends HELLO, answers PING, ACKs every MSG and drops
+Connects to the broker, sends HELLO (with the PIN or desk password for
+responders and the desk, see auth.py), answers PING, ACKs every MSG and drops
 duplicates: the broker resends a message until it is ACKed (at-least-once
 delivery), so the same msg_id can arrive twice. drop_acks=N skips the first
 N ACKs on purpose, to show a retry and "duplicate ignored" in the demo.
@@ -26,7 +27,8 @@ import config
 
 class Client:
 
-    def __init__(self, client_id, role, handler, host=config.HOST, port=config.PORT, drop_acks=0):
+    def __init__(self, client_id, role, handler, host=config.HOST, port=config.PORT, drop_acks=0,
+                 secret=None):
         self.client_id = client_id
         self.role = role
         self.handler = handler
@@ -36,7 +38,7 @@ class Client:
         self._send_lock = threading.Lock()
         self.sock = socket.create_connection((host, port), timeout=5)
         self.sock.settimeout(None)
-        self.send(f"HELLO {client_id} {role}")
+        self.send(f"HELLO {client_id} {role} {secret}" if secret else f"HELLO {client_id} {role}")
         threading.Thread(target=self._read, name="reader", daemon=True).start()
 
     def send(self, line):

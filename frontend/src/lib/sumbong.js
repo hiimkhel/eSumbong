@@ -116,9 +116,12 @@ export class Connection {
 
   get connected() { return this.session !== null; }
 
-  async connect(clientId, role) {
+  // secret: a responder's PIN or the desk password. Sent once, never kept.
+  async connect(clientId, role, secret) {
     await this.disconnect();
-    const { session } = await postJSON("/api/connect", { client_id: clientId, role });
+    const body = { client_id: clientId, role };
+    if (secret) body.secret = secret;
+    const { session } = await postJSON("/api/connect", body);
     this.session = session;
     this.events = new EventSource(`/api/events?session=${encodeURIComponent(session)}`);
     this.events.onmessage = (e) => this._handle(e.data);

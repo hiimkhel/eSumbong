@@ -39,7 +39,8 @@ class Events:
 class ClientTest(unittest.TestCase):
 
     def setUp(self):
-        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", retry_seconds=0.5, retry_check_seconds=0.1)
+        self.broker = broker.Broker("127.0.0.1", 0, ":memory:", retry_seconds=0.5, retry_check_seconds=0.1,
+                                    require_auth=False)  # sign-in: tests/test_auth.py
         _, self.port = self.broker.start()
         self.clients = []
 
