@@ -153,6 +153,14 @@ def get_report(report_id):
     return _dict(row)
 
 
+def list_reports():
+    """Every report as a dict, oldest first. Used by HISTORY."""
+    with _lock:
+        rows = _db().execute(
+            "SELECT * FROM reports ORDER BY created_at, rowid").fetchall()
+    return [dict(r) for r in rows]
+
+
 def update_report_status(report_id, status, responder_id=None):
     """Set a report's status and return the updated report (None if unknown).
 
@@ -190,14 +198,30 @@ def reports_to_escalate(older_than=None, now=None):
     return [dict(r) for r in rows]
 
 
+def reports_unresolved(older_than=None, now=None):
+    """Reports a responder took (RESPONDING) but has not RESOLVED, not yet
+    escalated, filed at least `older_than` seconds ago (default
+    config.UNRESOLVED_ESCALATE_SECONDS)."""
+    older_than = config.UNRESOLVED_ESCALATE_SECONDS if older_than is None else older_than
+    cutoff = _now(now) - older_than
+    with _lock:
+        rows = _db().execute(
+            "SELECT * FROM reports WHERE status = 'RESPONDING' AND escalated = 0"
+            " AND created_at <= ? ORDER BY created_at",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def mark_escalated(report_id):
     """Flag a report as escalated. Returns True only for the call that
     actually flipped the flag, so escalation fires exactly once even if two
-    threads race or the daemon re-checks the same report."""
+    threads race or the daemon re-checks the same report. Resolved and
+    withdrawn reports are never escalated."""
     with _lock, _db() as conn:
         cur = conn.execute(
             "UPDATE reports SET escalated = 1"
-            " WHERE report_id = ? AND escalated = 0 AND status = 'RECEIVED'",
+            " WHERE report_id = ? AND escalated = 0 AND status NOT IN ('RESOLVED', 'WITHDRAWN')",
             (report_id,),
         )
     return cur.rowcount == 1

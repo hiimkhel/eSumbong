@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Connection } from "../lib/sumbong.js";
+import { Connection, storageGet, storageSet } from "../lib/sumbong.js";
 
 const MAX_LOG_LINES = 500;
 
 // One broker session for the page that uses it, plus its protocol log.
 // onEvent(event) gets every parsed broker line; onState(state, reason) every change.
-export function useConnection({ onEvent, onState }) {
+// page ("resident" / "responder") keys the remembered sign-in: `saved` is this
+// tab's {id, role} to sign back in with, `lastId` the last one used in this browser.
+export function useConnection({ page, onEvent, onState }) {
+  const savedKey = `esumbong.signin.${page}`;
+  const lastKey = `esumbong.lastId.${page}`;
+  const [saved] = useState(() => storageGet("sessionStorage", savedKey));
+  const [lastId] = useState(() => storageGet("localStorage", lastKey));
   const [state, setState] = useState({ status: "offline", reason: "" });
   const [log, setLog] = useState([]);
   const lastCommand = useRef(null);
@@ -44,9 +50,15 @@ export function useConnection({ onEvent, onState }) {
   const connect = useCallback(async (clientId, role) => {
     await conn.connect(clientId, role);
     appendLog("→", `HELLO ${clientId} ${role}`);
-  }, [conn, appendLog]);
+    storageSet("sessionStorage", savedKey, { id: clientId, role });
+    storageSet("localStorage", lastKey, { id: clientId, role });
+  }, [conn, appendLog, savedKey, lastKey]);
 
-  const disconnect = useCallback(() => conn.disconnect(), [conn]);
+  // Signing out on purpose forgets this tab's sign-in; leaving the page does not.
+  const disconnect = useCallback(() => {
+    storageSet("sessionStorage", savedKey, null);
+    return conn.disconnect();
+  }, [conn, savedKey]);
 
   const send = useCallback(async (line) => {
     lastCommand.current = line.split(" ", 1)[0];
@@ -60,6 +72,8 @@ export function useConnection({ onEvent, onState }) {
     reason: state.reason,
     log,
     lastCommand,
+    saved,
+    lastId,
     connect,
     disconnect,
     send,

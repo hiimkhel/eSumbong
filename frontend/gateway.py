@@ -49,7 +49,7 @@ CONTENT_TYPES = {
     ".woff2": "font/woff2",
 }
 # Commands a browser may send after the gateway has sent HELLO for it.
-ALLOWED_COMMANDS = {"SUB", "UNSUB", "REPORT", "ACK", "STATUS", "PING", "PONG"}
+ALLOWED_COMMANDS = {"SUB", "UNSUB", "SUBS", "HISTORY", "REPORT", "WITHDRAW", "ACK", "STATUS", "PING", "PONG"}
 SSE_KEEPALIVE_SECONDS = 15
 MAX_BODY_BYTES = 16 * 1024
 CLOSED = object()  # sentinel placed on a session queue when the broker link ends
@@ -145,6 +145,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "urgent_categories": list(config.URGENT_CATEGORIES),
                 "roles": list(config.ROLES),
                 "report_statuses": list(config.REPORT_STATUSES),
+                "city_name": config.CITY_NAME,
+                "district_name": config.DISTRICT_NAME,
+                "barangays": [{"id": k, "name": v} for k, v in config.BARANGAYS.items()],
             })
         elif url.path == "/api/events":
             self._events(parse_qs(url.query).get("session", [""])[0])

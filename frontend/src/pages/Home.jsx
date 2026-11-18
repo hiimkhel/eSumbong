@@ -88,7 +88,7 @@ export default function Home() {
             <article className="card step">
               <span className="step-num"><Megaphone size={20} /></span>
               <h3>1. You report</h3>
-              <p>Pick a category and describe what happened. It's published to your purok, like <code>brgy.jaro.purok-3.fire</code>.</p>
+              <p>Pick a category and describe what happened. It's published to your purok, like <code>brgy.san-roque.purok-3.fire</code>.</p>
             </article>
             <article className="card step">
               <span className="step-num"><ChevronsUp size={20} /></span>
@@ -106,7 +106,7 @@ export default function Home() {
 
       <footer className="footer">
         <div className="container">
-          <span>eSumbong · A publish-subscribe barangay incident reporting system</span>
+          <span>eSumbong · Jaro, Iloilo City · A publish-subscribe barangay incident reporting system</span>
           <span>Iloilo City</span>
         </div>
       </footer>

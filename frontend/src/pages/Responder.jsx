@@ -1,35 +1,53 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Building2, CheckCircle2, ChevronDown, Clock, Inbox, MapPin, MessageSquare, Plus, Radio, ShieldCheck, Siren, Truck, User, X,
+  Building2, CheckCircle2, ChevronDown, Database, Eye, EyeOff, Clock, Inbox, MapPin, MessageSquare, Plus, Radio, ShieldCheck, Siren, Truck, User, X,
 } from "lucide-react";
 import AppBar from "../components/AppBar.jsx";
+import Combobox from "../components/Combobox.jsx";
+import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import ProtocolLog from "../components/ProtocolLog.jsx";
 import SignIn from "../components/SignIn.jsx";
 import { useToast } from "../components/Toast.jsx";
-import { CategoryTile, EmptyState, StatusBadge, StatusStepper } from "../components/ui.jsx";
+import { CategoryTile, EmptyState, HiddenToggle, StatusBadge, StatusStepper } from "../components/ui.jsx";
 import { useConnection } from "../hooks/useConnection.js";
-import { categoryMeta, clockTime, placeFromTopic } from "../lib/format.js";
-import { oneLine } from "../lib/sumbong.js";
+import { useDismissed } from "../hooks/useDismissed.js";
+import { barangayList, categoryMeta, clockTime, isClosed, placeFromTopic } from "../lib/format.js";
+import { oneLine, reportCovered } from "../lib/sumbong.js";
 
 const ROLES = [
   { value: "responder", label: "Responder", hint: "Tanod or captain", icon: ShieldCheck },
   { value: "desk", label: "City desk", hint: "Handles escalations", icon: Building2 },
 ];
 
-const PRESETS = [
-  { pattern: "brgy.#", label: "All barangays" },
-  { pattern: "city.iloilo.escalated.#", label: "Escalated to the city" },
-];
+// What each role may subscribe to (the broker enforces this; see escalation.py).
+const PRESETS = {
+  responder: [{ pattern: "brgy.#", label: "All of Jaro" }],
+  desk: [{ pattern: "city.iloilo.escalated.#", label: "Escalated to the city" }],
+};
+const PATTERN_FOR = {
+  responder: (id) => `brgy.${id}.#`,
+  desk: (id) => `city.iloilo.escalated.${id}`,
+};
 
 const FILTERS = [
   { id: "all", label: "All", test: () => true },
-  { id: "urgent", label: "Urgent", test: (r) => r.priority === "URGENT" && r.status !== "RESOLVED" },
-  { id: "open", label: "Open", test: (r) => r.status !== "RESOLVED" },
-  { id: "resolved", label: "Resolved", test: (r) => r.status === "RESOLVED" },
+  { id: "urgent", label: "Urgent", test: (r) => r.priority === "URGENT" && !isClosed(r.status) },
+  { id: "open", label: "Open", test: (r) => !isClosed(r.status) },
+  { id: "escalated", label: "Escalated", test: (r) => r.escalated && !isClosed(r.status) },
+  // Finished reports: resolved, plus the few withdrawn ones (they carry a Withdrawn badge).
+  { id: "resolved", label: "Resolved", test: (r) => isClosed(r.status) },
 ];
 
 const urgentFirst = (r) => (r.priority === "URGENT" ? 0 : 1);
-const openFirst = (r) => (r.status === "RESOLVED" ? 1 : 0);
+
+// A report resolved while this desk is open stays in the Open view (dimmed,
+// at the bottom) until its ✕ is clicked, so it doesn't vanish on Resolve.
+const withStatus = (r, status) => ({
+  ...r,
+  status,
+  resolvedHere: r.resolvedHere || (isClosed(status) && !isClosed(r.status)),
+});
+const openFirst = (r) => (isClosed(r.status) ? 1 : 0);
 
 // Responder / desk: subscribe to topics, receive reports, publish STATUS updates.
 export default function Responder() {
@@ -38,17 +56,52 @@ export default function Responder() {
   const [pattern, setPattern] = useState("");
   const [subs, setSubs] = useState([]);
   const [reports, setReports] = useState(() => new Map()); // report_id -> latest body + extras
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("open"); // resolved reports live in their own tab
   const [coverageOpen, setCoverageOpen] = useState(true);  // collapsible on phones only
   const seen = useRef(new Set());     // report ids already announced
   const lastSub = useRef(null);       // so an ERR right after SUB can roll it back
+  const autoSignIn = useRef(false);
+  const sentNotes = useRef(new Map()); // report_id -> note sent with STATUS, until UPDATED
 
   const conn = useConnection({
+    page: "responder",
     onState: (status) => {
       if (status !== "online") setSubs([]);
     },
     onEvent: (event) => {
-      if (event.command === "MSG") {
+      if (event.command === "UPDATED") {
+        // The broker accepted our STATUS; only now does the card change.
+        const note = sentNotes.current.get(event.reportId);
+        sentNotes.current.delete(event.reportId);
+        setReports((prev) => {
+          const r = prev.get(event.reportId);
+          return r ? new Map(prev).set(event.reportId, { ...withStatus(r, event.status), note: note ?? r.note }) : prev;
+        });
+        toast(event.status === "RESPONDING" ? "Marked as responding. The resident has been notified." : "Report resolved.");
+      } else if (event.command === "SUBS") {
+        setSubs(event.patterns);
+        // Drop reports this ID's subscriptions no longer reach (e.g. dropped by the broker).
+        setReports((prev) => new Map([...prev].filter(([id, r]) => reportCovered(event.patterns, id, r))));
+      } else if (event.command === "HISTEND") {
+        // SUB is always followed by HISTORY, and the broker answers in order,
+        // so reaching HISTEND means the SUB before it was accepted.
+        lastSub.current = null;
+      } else if (event.command === "HIST") {
+        // A report filed before this sign-in or subscription. No toast.
+        const body = event.body;
+        if (!body || !body.report_id) return;
+        seen.current.add(body.report_id);
+        setReports((prev) => {
+          const existing = prev.get(body.report_id);
+          return new Map(prev).set(body.report_id, {
+            ...existing,
+            ...body,
+            priority: body.priority || event.priority,
+            lastTopic: event.topic,
+            receivedAt: existing?.receivedAt || (body.created_at ? body.created_at * 1000 : Date.now()),
+          });
+        });
+      } else if (event.command === "MSG") {
         const body = event.body;
         if (!body || !body.report_id) return;
         const priority = body.priority || event.priority;
@@ -61,15 +114,31 @@ export default function Responder() {
             priority,
             lastTopic: event.topic,
             receivedAt: existing?.receivedAt || now,
+            resolvedHere: existing ? withStatus(existing, body.status).resolvedHere : false,
           });
         });
+        const what = `${categoryMeta(body.category).label} at ${placeFromTopic(body.topic)}`;
+        if (body.status === "WITHDRAWN" && reports.get(body.report_id)?.status !== "WITHDRAWN") {
+          toast(`Withdrawn by the resident: ${what}`);
+        }
         if (!seen.current.has(body.report_id)) {
           seen.current.add(body.report_id);
-          if (priority === "URGENT") toast(`Urgent: ${categoryMeta(body.category).label} at ${placeFromTopic(body.topic)}`, true);
+          if (priority === "URGENT") toast(`Urgent: ${what}`, true);
+          else if (body.escalated) toast(`Escalated to the city: ${what}`, true);
+        } else if (body.escalated && !reports.get(body.report_id)?.escalated) {
+          toast(`Escalated to the city: ${what}`, true);
         }
       } else if (event.command === "ERR") {
         toast(`Broker error: ${event.reason}`, true);
-        if (conn.lastCommand.current === "SUB" && lastSub.current) {
+        const stale = /^report (\S+) is already (RESPONDING|RESOLVED|WITHDRAWN)$/.exec(event.reason);
+        if (stale) {
+          const [, reportId, status] = stale;
+          setReports((prev) => {
+            const r = prev.get(reportId);
+            return r ? new Map(prev).set(reportId, withStatus(r, status)) : prev;
+          });
+        }
+        if (lastSub.current) {
           const failed = lastSub.current;
           lastSub.current = null;
           setSubs((prev) => prev.filter((p) => p !== failed));
@@ -78,28 +147,67 @@ export default function Responder() {
     },
   });
 
+  const [dismissed, dismiss, restore] = useDismissed("responder", identity.id);
+  const [hideAsk, setHideAsk] = useState(null); // report id waiting for "Hide?" confirmation
+  // Hidden only once resolved: an open report must never disappear from the desk.
+  const visible = useMemo(
+    () => [...reports.entries()].filter(([id, r]) => !(isClosed(r.status) && dismissed.has(id))),
+    [reports, dismissed],
+  );
+
+  // Hidden reports appear in no list, unless "Show hidden" is open in the Resolved tab.
+  // They still count as resolved, so hiding never changes the numbers.
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenList = useMemo(
+    () => [...reports.entries()]
+      .filter(([id, r]) => isClosed(r.status) && dismissed.has(id))
+      .sort(([, a], [, b]) => b.receivedAt - a.receivedAt),
+    [reports, dismissed],
+  );
+  const hiddenHere = filter === "resolved";
+
   const counts = useMemo(() => {
-    const all = [...reports.values()];
-    return Object.fromEntries(FILTERS.map((f) => [f.id, all.filter(f.test).length]));
-  }, [reports]);
+    const all = visible.map(([, r]) => r);
+    const result = Object.fromEntries(FILTERS.map((f) => [f.id, all.filter(f.test).length]));
+    result.resolved += hiddenList.length;
+    return result;
+  }, [visible, hiddenList]);
 
   const feed = useMemo(() => {
     const { test } = FILTERS.find((f) => f.id === filter);
-    return [...reports.entries()]
-      .filter(([, r]) => test(r))
+    const shown = visible
+      .filter(([, r]) => test(r) || (filter === "open" && r.resolvedHere))
       .sort(([, a], [, b]) => openFirst(a) - openFirst(b) || urgentFirst(a) - urgentFirst(b) || b.receivedAt - a.receivedAt);
-  }, [reports, filter]);
+    return showHidden && hiddenHere ? [...shown, ...hiddenList] : shown;
+  }, [visible, filter, showHidden, hiddenHere, hiddenList]);
+
+  const [restoring, setRestoring] = useState(Boolean(conn.saved));
 
   async function connect(id, role) {
+    setReports(new Map());
+    seen.current = new Set();
+    lastSub.current = null;
     try {
       await conn.connect(id, role);
       setIdentity({ id, role });
+      await conn.send("SUBS");     // coverage the broker kept for this ID
+      await conn.send("HISTORY");  // reports that coverage already reaches
     } catch (err) {
       toast(err.message, true);
+    } finally {
+      setRestoring(false);
     }
   }
 
+  // Sign this tab back in after a reload or the back button.
+  useEffect(() => {
+    if (autoSignIn.current) return;
+    autoSignIn.current = true;
+    if (conn.saved) connect(conn.saved.id, conn.saved.role);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!conn.online) {
+    if (restoring) return <AppBar active="responder" conn={conn} />;
     return (
       <>
         <AppBar active="responder" conn={conn} />
@@ -109,7 +217,8 @@ export default function Responder() {
           foot="Residents see each status update you send."
           placeholder="e.g. tanod-jaro-1"
           roles={ROLES}
-          defaultRole={identity.role}
+          defaultId={conn.lastId?.id}
+          defaultRole={conn.lastId?.role || identity.role}
           reason={conn.reason}
           onConnect={connect}
         />
@@ -119,13 +228,14 @@ export default function Responder() {
 
   async function subscribe(raw) {
     const p = raw.trim().toLowerCase();
-    if (!p || /\s/.test(p)) return toast("A topic pattern is one word, e.g. brgy.jaro.#", true);
+    if (!p || /\s/.test(p)) return toast("A topic pattern is one word, e.g. brgy.san-roque.#", true);
     if (subs.includes(p)) return toast(`Already subscribed to ${p}`);
     // Add first: the broker's ERR can arrive before the send request returns.
     lastSub.current = p;
     setSubs((prev) => [...prev, p]);
     try {
       await conn.send(`SUB ${p}`);
+      await conn.send("HISTORY");  // pull in reports filed before this subscription
       setPattern("");
       setCoverageOpen(false); // on phones, get the coverage panel out of the way of the feed
     } catch (err) {
@@ -137,7 +247,10 @@ export default function Responder() {
   async function unsubscribe(p) {
     try {
       await conn.send(`UNSUB ${p}`);
-      setSubs((prev) => prev.filter((x) => x !== p));
+      const remaining = subs.filter((x) => x !== p);
+      setSubs(remaining);
+      // Drop reports that only that subscription brought in.
+      setReports((prev) => new Map([...prev].filter(([id, r]) => reportCovered(remaining, id, r))));
     } catch (err) {
       toast(err.message, true);
     }
@@ -145,20 +258,18 @@ export default function Responder() {
 
   async function updateStatus(reportId, status, noteText) {
     const note = oneLine(noteText) || (status === "RESPONDING" ? "On the way" : "Resolved");
+    // The card updates on the broker's UPDATED reply; a refusal arrives as ERR.
+    sentNotes.current.set(reportId, note);
     try {
       await conn.send(`STATUS ${reportId} ${status} ${note}`);
-      setReports((prev) => {
-        const r = prev.get(reportId);
-        return r ? new Map(prev).set(reportId, { ...r, status, note }) : prev;
-      });
-      toast(status === "RESPONDING" ? "Marked as responding. The resident has been notified." : "Report resolved.");
     } catch (err) {
+      sentNotes.current.delete(reportId);
       toast(err.message, true);
     }
   }
 
   const role = ROLES.find((r) => r.value === identity.role) || ROLES[0];
-  const responding = [...reports.values()].filter((r) => r.status === "RESPONDING").length;
+  const responding = visible.filter(([, r]) => r.status === "RESPONDING").length;
 
   return (
     <>
@@ -201,7 +312,8 @@ export default function Responder() {
                 <p className="card-sub coverage-help"><code>*</code> matches one level, <code>#</code> the rest.</p>
                 <form className="sub-form" onSubmit={(e) => { e.preventDefault(); subscribe(pattern); }}>
                   <label className="sr-only" htmlFor="pattern">Topic pattern</label>
-                  <input id="pattern" className="input" placeholder="brgy.jaro.#" value={pattern} onChange={(e) => setPattern(e.target.value)} />
+                  <Combobox id="pattern" placeholder={PATTERN_FOR[role.value]("san-roque")} value={pattern} onChange={setPattern}
+                    options={barangayList().map((b) => ({ value: b.id, label: b.name, text: PATTERN_FOR[role.value](b.id), hint: PATTERN_FOR[role.value](b.id) }))} />
                   <button type="submit" className="btn btn-primary" aria-label="Subscribe"><Plus size={18} /></button>
                 </form>
                 {subs.length > 0 ? (
@@ -219,7 +331,7 @@ export default function Responder() {
                   <p className="card-sub coverage-help">Not subscribed to anything yet.</p>
                 )}
                 <div className="presets">
-                  {PRESETS.map(({ pattern: p, label }) => (
+                  {PRESETS[role.value].map(({ pattern: p, label }) => (
                     <button key={p} type="button" className="preset" disabled={subs.includes(p)} onClick={() => subscribe(p)}>
                       <span>{label}</span>
                       <code>{p}</code>
@@ -262,11 +374,11 @@ export default function Responder() {
 
               <div className="card card-pad feed-card">
                 {feed.length === 0 ? (
-                  reports.size === 0 ? (
+                  visible.length === 0 ? (
                     <EmptyState icon={Radio} title={subs.length ? "Listening for reports" : "No coverage yet"}>
                       {subs.length
                         ? "New reports for your topics will appear here as soon as residents send them."
-                        : "Subscribe to a barangay on the left, e.g. brgy.jaro.#, to start receiving reports."}
+                        : role.value === "desk" ? "Subscribe to escalations on the left, e.g. city.iloilo.escalated.#, to receive reports sent to the city." : "Subscribe to your barangay on the left, e.g. brgy.san-roque.#, to start receiving reports."}
                     </EmptyState>
                   ) : (
                     <EmptyState icon={Inbox} title="Nothing here">No reports match this filter.</EmptyState>
@@ -274,27 +386,41 @@ export default function Responder() {
                 ) : (
                   <ul className="reports">
                     {feed.map(([id, r]) => (
-                      <IncidentCard key={id} id={id} report={r} onStatus={updateStatus} />
+                      <IncidentCard key={id} id={id} report={r} role={identity.role} onStatus={updateStatus}
+                        hidden={dismissed.has(id)} onDismiss={setHideAsk} onRestore={restore} />
                     ))}
                   </ul>
+                )}
+                {hiddenHere && (
+                  <HiddenToggle count={hiddenList.length} open={showHidden} onToggle={() => setShowHidden((v) => !v)} />
                 )}
               </div>
             </section>
           </div>
 
           <ProtocolLog entries={conn.log} />
+          <ConfirmDialog open={hideAsk !== null} title="Hide this report?" confirmLabel="Hide report"
+            icon={EyeOff} confirmIcon={EyeOff}
+            onCancel={() => setHideAsk(null)}
+            onConfirm={() => { dismiss(hideAsk); setHideAsk(null); }}>
+            <p className="confirm-line"><CheckCircle2 size={16} /> <span>This report will be removed from this desk's lists on this browser. You can still find it in the Resolved tab.</span></p>
+            <p className="confirm-line muted"><Database size={16} /> <span>It is <strong>not deleted</strong>: the report and its full history stay saved in eSumbong.</span></p>
+          </ConfirmDialog>
         </div>
       </main>
     </>
   );
 }
 
-function IncidentCard({ id, report: r, onStatus }) {
+function IncidentCard({ id, report: r, role, onStatus, hidden, onDismiss, onRestore }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const status = r.status || "RECEIVED";
   const urgent = r.priority === "URGENT";
-  const resolved = status === "RESOLVED";
+  const resolved = isClosed(status); // resolved or withdrawn: no more actions
+  // Once escalated, the city desk owns the report: tanods may respond, not resolve.
+  const canResolve = !r.escalated || role === "desk";
+  const canRespond = status === "RECEIVED";
 
   async function act(next) {
     setBusy(true);
@@ -315,6 +441,20 @@ function IncidentCard({ id, report: r, onStatus }) {
           {urgent && <span className="badge badge-urgent">Urgent</span>}
           {r.escalated && <span className="badge badge-escalated">Escalated to city</span>}
           <StatusBadge status={status} />
+          {resolved && hidden && <span className="badge badge-neutral"><EyeOff size={12} /> Hidden</span>}
+          {resolved && !hidden && (
+            <button type="button" className="icon-btn" title="Hide from this desk" aria-label={`Hide report ${id}`}
+              onClick={() => onDismiss(id)}>
+              <X size={16} />
+            </button>
+          )}
+          {resolved && hidden && (
+            // Only seen in the Resolved tab: brings the report back to the other lists.
+            <button type="button" className="btn btn-ghost btn-sm" title="Show in the other lists again"
+              aria-label={`Unhide report ${id}`} onClick={() => onRestore(id)}>
+              <Eye size={15} /> Unhide
+            </button>
+          )}
         </div>
       </div>
       {r.description && <p className="report-desc">{r.description}</p>}
@@ -325,19 +465,24 @@ function IncidentCard({ id, report: r, onStatus }) {
         <span><User size={12} /> {r.reporter ? r.reporter : "Anonymous"}</span>
         <span><Clock size={12} /> {clockTime(r.receivedAt)}</span>
       </div>
-      {!resolved && (
+      {!resolved && (canRespond || canResolve) && (
         <div className="report-actions">
           <input className="input" placeholder="Add a note for the resident (optional)" maxLength={200}
             value={note} onChange={(e) => setNote(e.target.value)} aria-label={`Note for report ${id}`} />
-          {status === "RECEIVED" && (
+          {canRespond && (
             <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => act("RESPONDING")}>
               <Truck size={15} /> Respond
             </button>
           )}
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => act("RESOLVED")}>
-            <CheckCircle2 size={15} /> Resolve
-          </button>
+          {canResolve && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => act("RESOLVED")}>
+              <CheckCircle2 size={15} /> Resolve
+            </button>
+          )}
         </div>
+      )}
+      {!resolved && !canResolve && (
+        <p className="card-sub"><Building2 size={13} /> Escalated to the city. Only the city desk can resolve it.</p>
       )}
     </li>
   );
