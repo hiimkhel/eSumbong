@@ -9,7 +9,7 @@ export default function Home() {
 
       <section className="hero pattern">
         <div className="container hero-grid">
-          <div>
+          <div className="hero-copy">
             <span className="eyebrow">Barangay incident reporting · Iloilo City</span>
             <h1>May <em>sumbong</em> ka?</h1>
             <p className="hero-lead">
@@ -25,9 +25,9 @@ export default function Home() {
               </a>
             </div>
             <div className="hero-proof">
-              <span><Zap size={16} /> Urgent reports jump the queue</span>
-              <span><EyeOff size={16} /> Report anonymously</span>
-              <span><Clock size={16} /> Unanswered reports escalate</span>
+              <span><Zap size={16} /> Urgent reports first</span>
+              <span><EyeOff size={16} /> Anonymous option</span>
+              <span><Clock size={16} /> Escalates if unanswered</span>
             </div>
           </div>
 
