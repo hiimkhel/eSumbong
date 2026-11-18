@@ -128,7 +128,7 @@ The test writes to the live database. Its IDs (`smoke-res-<tag>` and so on) and 
 | 4 | A | Watch the feed | The report appears with `resident-test` as reporter; the Open count goes up |
 | 5 | A | Type a note, click **Respond** | Badge turns Responding; toast confirms |
 | 6 | B | Watch the report | The tracker moves to Responding and shows the note |
-| 7 | A | Click **Resolve** | The card dims; the Resolved count goes up |
+| 7 | A | Click **Resolve** (within 3 minutes of step 3, see note below) | The card dims; the Resolved count goes up |
 | 8 | B | Watch the report | Resolved; the hide (✕) button appears |
 | 9 | B | Send an anonymous **Fire** report | Urgent warning before sending; "Escalated to city" badge after |
 | 10 | A | Watch the feed | The fire report is at the top, marked Urgent, reporter "Anonymous" |
@@ -137,6 +137,8 @@ The test writes to the live database. Its IDs (`smoke-res-<tag>` and so on) and 
 | 13 | B | Reload the page | Still signed in; earlier reports are restored |
 | 14 | — | Stop the broker (Ctrl+C), wait a moment | Both windows return to sign-in with "Broker closed the connection" |
 | 15 | — | Start the broker again and sign in with the same IDs | Reports and subscriptions are back |
+
+**Timing:** with the demo timers in `config.py`, a report escalates to the city if nobody responds within 2 minutes, or if it is not resolved 3 minutes after filing. Once escalated, a tanod's card shows "Only the city desk can resolve it" instead of **Resolve**. Do steps 3–7 within 3 minutes, or resolve the report as the City desk (subscribe to `city.iloilo.escalated.#`).
 
 Resolve or withdraw anything you created by hand. If a step fails, note the step number and open **Protocol log** at the bottom of the page: it shows every line sent and received.
 
