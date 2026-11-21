@@ -27,7 +27,10 @@ import topic_matcher
 
 
 def handle(kind, data):
+    """Print one line from the broker. client.py ACKs every MSG before this runs."""
     if kind == "MSG":
+        # A new report, a status change, an escalation or an advisory that
+        # matched one of our subscription patterns.
         client.say(client.describe(data))
     elif kind == "UPDATED":
         report_id, status = data.split(" ", 1)
@@ -41,13 +44,17 @@ def handle(kind, data):
     elif kind == "HISTEND":
         client.say(f"({data} report(s))")
     elif kind == "DUPLICATE":
+        # At-least-once delivery: if our ACK was lost the broker resends the same
+        # msg_id. We drop the copy so the tanod never acts on a report twice.
         client.say(f"duplicate {data} ignored (already shown; ACKed again so the broker stops resending)")
     elif kind == "ME":
+        # Reply to WHOAMI: "<client_id> <role> <barangay>", "-" when not limited.
         _, _, barangay = data.split(" ")
         where = config.BARANGAYS.get(barangay, barangay) if barangay != "-" else f"all of {config.DISTRICT_NAME}"
         client.say(f"Signed in. This account covers {where}.")
     elif kind == "ERR":
         client.say(f"! {data}")
+        # A refused sign-in is followed by the broker closing the connection.
         if data.startswith("sign-in failed") or data.endswith("must sign in with their PIN") \
                 or data.endswith("must sign in with the desk password"):
             client.say("Check the ID and PIN (accounts are made with users.py).")
@@ -62,6 +69,8 @@ def advisory_line(rest):
     if barangay not in config.BARANGAYS:
         raise ValueError(f"usage: advisory <barangay> [urgent] <text>; {barangay or '?'} is not a barangay of "
                          f"{config.DISTRICT_NAME}")
+    # An optional leading word "urgent" sends the advisory as URGENT, which is
+    # delivered before NORMAL messages when a resident reconnects.
     priority = "NORMAL"
     first, _, remainder = text.partition(" ")
     if first.lower() == "urgent":
@@ -86,6 +95,8 @@ def main():
     elif not args.id:
         parser.error("--id is required for responders")
     client.utf8_console()
+    # The PIN is typed at a hidden prompt, never on the command line, so it does
+    # not end up in the shell history.
     try:
         secret = getpass.getpass("City desk password: " if args.role == "desk" else f"PIN for {args.id}: ")
     except (EOFError, KeyboardInterrupt):
@@ -94,12 +105,16 @@ def main():
         sys.exit("! a PIN or password is one word with no spaces")
 
     c = client.Client(args.id, args.role, handle, args.host, args.port, secret=secret)
-    c.send("WHOAMI")
+    c.send("WHOAMI")  # which barangay this account may cover
+    # Subscriptions are saved by the broker, so --sub is only needed the first
+    # time; on later runs the old ones still apply.
     for pattern in args.sub:
         c.send(f"SUB {pattern}")
     c.send("SUBS")
 
     def status(new_status):
+        """Make the respond/resolve command. The broker saves the change and
+        publishes it on report.<id>.status, so the resident sees it."""
         def run(rest):
             report_id, _, note = rest.partition(" ")
             if not report_id:
@@ -108,6 +123,8 @@ def main():
         return run
 
     def one_pattern(command):
+        """Make the sub/unsub command. A pattern has no spaces; * matches one
+        topic level and # the rest (brgy.san-roque.#)."""
         def run(rest):
             if not rest or " " in rest:
                 return print(f"! usage: {command.lower()} <pattern>, e.g. brgy.san-roque.#")

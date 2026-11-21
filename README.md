@@ -121,6 +121,7 @@ There are three layers. The first two run on any machine with no server; the thi
 | Backend unit + integration (Python) | `python -m unittest discover -s tests` | topics, store, broker, escalation, CLI clients, fault/reliability tests, and the web gateway (`tests/test_gateway.py`: HTTP API, SSE bridge, command filter, static files) |
 | Web app (React, Vitest) | `cd frontend` then `npm test` | protocol parsing, topic matching, the gateway client and its ACK/duplicate handling, every component, both hooks, and full Resident and Responder flows against a simulated gateway |
 | Live server smoke test | `python tests/live_smoke.py --url <gateway URL>` | a real gateway + broker + database, end to end |
+| Fault test evidence | `python tests/fault_evidence.py` | the 7 tests of [FAULT_TEST_REPORT.md](FAULT_TEST_REPORT.md) against a real broker process, with a transcript to screenshot (about 1 minute; uses its own temporary database, never `sumbong.db`) |
 
 Run one Python file with `python -m unittest tests.test_gateway -v`, or one web test file with `npx vitest run src/pages/Responder.test.jsx`.
 
@@ -180,18 +181,19 @@ Resolve or withdraw anything you created by hand. If a step fails, note the step
 Delete `sumbong.db*` first for a clean start, then create the accounts: `python users.py desk-password`, then `python users.py add --barangay san-roque --position tanod` twice (SR-T01 is Tanod A, SR-T02 is Tanod B) and `python users.py add --barangay san-roque --position captain` (SR-CAPT). Each responder asks for its PIN when it starts. Each step names the terminal to type in.
 
 1. **Empty status screen.** Run `python broker.py`, then `python status.py --watch`. It shows "No reports yet."
-2. **Connect Tanod A, Tanod B, Captain and the city desk**, plus one resident:
+2. **Connect four subscribers (Tanod A, Tanod B, Captain, city desk) and two publishers (Resident 1, Resident 2)**, each on different topics:
    ```
    python responder.py --id SR-T01 --sub brgy.san-roque.purok-3.#
    python responder.py --id SR-T02 --sub brgy.san-roque.purok-5.# --sub brgy.san-roque.advisory
    python responder.py --id SR-CAPT --sub brgy.san-roque.purok-3.#
    python responder.py --role desk --sub city.iloilo.escalated.#
    python resident.py --id resident1
+   python resident.py --id resident2
    ```
 3. **The anonymous noise report in Purok 3 reaches Tanod A and the Captain only.** As Resident 1: `report san-roque purok-3 noise anon Loud karaoke past midnight`. Tanod A and the Captain print it "from anonymous". Tanod B (Purok 5) and the city desk get nothing (noise is NORMAL).
 4. **Tanod A sends RESPONDING and Resident 1 sees it.** As Tanod A: `respond <report_id> on the way`. Resident 1 prints "is now RESPONDING by SR-T01 - on the way".
 5. **Tanod A sends RESOLVED and Resident 1 sees it.** As Tanod A: `resolve <report_id> settled`. Resident 1 prints "is now RESOLVED".
-6. **Close Tanod B, then send a fire report and an advisory.** Tanod B: `quit`. Captain: `advisory san-roque Clean-up drive on Saturday`. Then Resident 1: `report san-roque purok-5 fire Smoke near the chapel`. The city desk gets the fire report at once (URGENT).
+6. **Close Tanod B, then send a fire report and an advisory.** Tanod B: `quit`. Captain: `advisory san-roque Clean-up drive on Saturday`. Then Resident 2: `report san-roque purok-5 fire Smoke near the chapel`. The city desk gets the fire report at once (URGENT); Tanod A and the Captain (Purok 3) do not.
 7. **Reconnect Tanod B: the fire report arrives first.** Run `python responder.py --id SR-T02` (its subscriptions are remembered). The fire report prints before the older advisory (URGENT first).
 8. **(Bonus) A lost ACK is resent.** In a new terminal, start a bare client that files a report and never ACKs anything:
    ```
@@ -210,9 +212,9 @@ Delete `sumbong.db*` first for a clean start, then create the accounts: `python 
 | Jan Dennis | Status & Escalation | escalation.py |
 | Kelly | Clients | resident.py, responder.py, status.py, client.py |
 | Arvin | Web app (extra) | frontend/ (React interface and gateway.py) |
-| *(to assign)* | Sign-in (extra) | auth.py, users.py |
+| Kelly | Sign-in (extra) | auth.py, users.py |
 
-Tests are in `tests/`, one file per module, plus `test_clients.py` and `test_reliability.py` for the fault tests, `test_gateway.py` for the web gateway, `test_auth.py` for sign-in and `live_smoke.py` for the live-server check. The web app's tests sit next to the code as `frontend/src/**/*.test.js(x)`, with a simulated gateway in `frontend/src/test/fakeGateway.js`.
+Tests are in `tests/`, one file per module, plus `test_clients.py` and `test_reliability.py` for the fault tests, `fault_evidence.py` for the live fault-test transcript, `test_gateway.py` for the web gateway, `test_auth.py` for sign-in and `live_smoke.py` for the live-server check. The web app's tests sit next to the code as `frontend/src/**/*.test.js(x)`, with a simulated gateway in `frontend/src/test/fakeGateway.js`.
 
 ## Contribution Rules
 

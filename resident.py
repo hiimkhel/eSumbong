@@ -25,10 +25,13 @@ import topic_matcher
 def parse_report(rest):
     """'<barangay> <purok> <category> [anon] <text>' -> REPORT line, or raise ValueError
     with a message for the resident. The broker checks everything again."""
+    # maxsplit 3 keeps the free-text description in one piece, spaces included.
     parts = rest.split(" ", 3)
     if len(parts) < 4 or not parts[3].strip():
         raise ValueError("usage: report <barangay> <purok> <category> [anon] <what happened>")
     barangay, purok, category, text = parts
+    # Topic levels are lowercase with dashes ("San Roque" -> san-roque), the same
+    # form the responders subscribe with, so their patterns match.
     barangay, purok = topic_matcher.normalize_level(barangay), topic_matcher.normalize_level(purok)
     category = category.lower()
     if barangay not in config.BARANGAYS:
@@ -37,20 +40,27 @@ def parse_report(rest):
         raise ValueError("give a purok or landmark, e.g. purok-3 or near-jaro-plaza")
     if category not in config.CATEGORIES:
         raise ValueError(f"category must be one of: {', '.join(config.CATEGORIES)}")
+    # An optional leading word "anon" makes the report anonymous (anon field Y);
+    # the broker then leaves the reporter out of every message it publishes.
     anon = "N"
     first, _, remainder = text.partition(" ")
     if first.lower() == "anon":
         anon, text = "Y", remainder
-    text = " ".join(text.split())
+    text = " ".join(text.split())  # one line: the protocol ends each message at "\n"
     if not text:
         raise ValueError("say what happened after the category")
     return f"REPORT {topic_matcher.incident_topic(barangay, purok, category)} {anon} {text}"
 
 
 def handle(kind, data):
+    """Print one line from the broker. client.py has already ACKed each MSG and
+    filtered out duplicates, so every MSG here is new."""
     if kind == "MSG":
+        # Status updates on report.<id>.status (the broker subscribed us when we
+        # filed) and advisories of the barangays we follow.
         client.say(client.describe(data))
     elif kind == "REPORTED":
+        # The broker saved the report to the database before replying.
         client.say(f"Report {data} filed. Your barangay has been notified; updates will show here.")
     elif kind == "UPDATED":
         report_id, status = data.split(" ", 1)
@@ -60,6 +70,8 @@ def handle(kind, data):
     elif kind == "HISTEND":
         client.say(f"({data} report(s))")
     elif kind == "SUBS":
+        # Subscriptions are stored by the broker, so they survive a restart; show
+        # only the advisory ones (brgy.<barangay>.advisory).
         follows = [p.split(".")[1] for p in data.split() if p.endswith(".advisory")]
         if follows:
             client.say("Following advisories from: " + ", ".join(config.BARANGAYS.get(b, b) for b in follows))
@@ -79,6 +91,8 @@ def main():
     args = parser.parse_args()
     client.utf8_console()
 
+    # Residents sign in with an ID only (HELLO <id> resident). On HELLO the broker
+    # sends any messages that waited while we were offline.
     c = client.Client(args.id, "resident", handle, args.host, args.port)
 
     def report(rest):
@@ -97,10 +111,12 @@ def main():
         barangay = topic_matcher.normalize_level(rest)
         if barangay not in config.BARANGAYS:
             return print(f"! usage: follow <barangay>, one of {config.DISTRICT_NAME}'s; type 'barangays'")
+        # A resident may only subscribe to advisory topics; the broker refuses
+        # anything else with ERR.
         c.send(f"SUB {topic_matcher.advisory_topic(barangay)}")
         print(f"Following advisories from {config.BARANGAYS[barangay]}.")
 
-    c.send("SUBS")
+    c.send("SUBS")  # show which barangays we already follow from earlier sessions
     client.run_shell(c, {
         "report": (report, "report <barangay> <purok> <category> [anon] <text>", "file a report"),
         "withdraw": (withdraw, "withdraw <report_id> [reason]", "take back a report before anyone responds"),

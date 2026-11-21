@@ -26,6 +26,8 @@ def connect(path):
     """Open the database read-only, or return None if it does not exist yet."""
     if not os.path.exists(path):
         return None
+    # mode=ro: SQLite refuses any write through this connection, so the screen
+    # can run beside the broker without changing its data.
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
@@ -54,6 +56,8 @@ def render(conn, limit=20):
         out.append("No database yet. Start the broker (python broker.py); reports will appear here.")
         return "\n".join(out)
     try:
+        # Three views of the same database: the reports, the per-subscriber
+        # deliveries (the persistent queue) and the status history.
         reports = conn.execute("SELECT * FROM reports ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         counts = dict(conn.execute("SELECT status, COUNT(*) FROM reports GROUP BY status").fetchall())
         escalated = conn.execute("SELECT COUNT(*) FROM reports WHERE escalated = 1").fetchone()[0]
@@ -62,7 +66,7 @@ def render(conn, limit=20):
             " FROM deliveries d JOIN messages m ON m.msg_id = d.msg_id"
             " ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?", (limit,)).fetchall()
         log = conn.execute("SELECT * FROM status_log ORDER BY time DESC, id DESC LIMIT ?", (limit,)).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError:  # the file exists but the broker never created the tables
         out.append("The database has no tables yet. Start the broker once to create them.")
         return "\n".join(out)
 
@@ -79,6 +83,8 @@ def render(conn, limit=20):
     else:
         out.append("No reports yet.")
 
+    # One row per message per subscriber. PENDING rows are the ones the broker
+    # keeps resending (ATTEMPTS goes up) or holds for an offline subscriber.
     out += ["", f"DELIVERIES (latest {limit}; PENDING = waiting for ACK)"]
     if deliveries:
         out.append(table(
@@ -122,6 +128,7 @@ def main():
     if args.watch is None:
         print(show())
         return
+    # Reopen the database on every refresh so each screen shows the latest data.
     try:
         while True:
             screen = show()
